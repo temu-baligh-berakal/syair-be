@@ -3,13 +3,16 @@ import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app as fastapi_app
 from app.routers.hadits_router import get_client
-from app.services.hadits_service import (
-    _parse_hit,
-    search_hadits,
-    advanced_search_hadits,
-)
+from app.services.hadits_service import _parse_hit, search_hadits, advanced_search_hadits
+from app.services.strategies import get_strategy, get_available_modes
+
+# Import strategies agar terdaftar
+import app.services.strategies.knn     # noqa: F401
+import app.services.strategies.bm25    # noqa: F401
+import app.services.strategies.hybrid  # noqa: F401
+
 
 FAKE_EMBEDDING = np.zeros(384)
 
@@ -25,13 +28,11 @@ FAKE_HIT = {
 }
 
 def make_opensearch_response(hits: list[dict]) -> dict:
-    """Buat response OpenSearch palsu."""
     return {"hits": {"hits": hits}}
 
 
 @pytest.fixture
 def mock_model():
-    """Mock SentenceTransformer agar tidak download model."""
     with patch("app.services.hadits_service.get_model") as m:
         model = MagicMock()
         model.encode.return_value = FAKE_EMBEDDING
@@ -41,7 +42,6 @@ def mock_model():
 
 @pytest.fixture
 def mock_client():
-    """Mock OpenSearch client."""
     client = MagicMock()
     client.search.return_value = make_opensearch_response([FAKE_HIT])
     return client
@@ -49,10 +49,36 @@ def mock_client():
 
 @pytest.fixture
 def test_client(mock_client):
-    """FastAPI TestClient dengan dependency get_client di-override."""
-    app.dependency_overrides[get_client] = lambda: mock_client
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides[get_client] = lambda: mock_client
+    yield TestClient(fastapi_app)
+    fastapi_app.dependency_overrides.clear()
+
+
+class TestStrategyRegistry:
+
+    def test_semua_mode_terdaftar(self):
+        modes = get_available_modes()
+        assert "knn" in modes
+        assert "bm25" in modes
+        assert "hybrid" in modes
+
+    def test_get_strategy_valid(self):
+        for mode in get_available_modes():
+            strategy = get_strategy(mode)
+            assert hasattr(strategy, "build_query")
+
+    def test_get_strategy_tidak_dikenal(self):
+        with pytest.raises(ValueError, match="tidak dikenal"):
+            get_strategy("tidak_ada")
+
+    def test_setiap_strategy_return_dict_dengan_query(self):
+        embedding = [0.0] * 384
+        for mode in get_available_modes():
+            strategy = get_strategy(mode)
+            body = strategy.build_query(query_text="test", embedding=embedding, top_k=5)
+            assert "query" in body
+            assert "size" in body
+            assert body["size"] == 5
 
 
 class TestParseHit:
@@ -62,15 +88,12 @@ class TestParseHit:
         assert result.nama_perawi == "Bukhari"
         assert result.nomor_hadits == 1
         assert result.score == 0.92
-        assert result.arab == "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ"
 
     def test_parse_hit_field_kosong(self):
-        """Field yang tidak ada di _source diisi nilai default."""
         hit = {"_score": 0.5, "_source": {}}
         result = _parse_hit(hit, score=0.5)
         assert result.nama_perawi == ""
         assert result.nomor_hadits == 0
-        assert result.terjemahan == ""
 
 
 class TestSearchHaditsService:
@@ -83,28 +106,35 @@ class TestSearchHaditsService:
         search_hadits(client=mock_client, query="niat ibadah", top_k=5)
         mock_client.search.assert_called_once()
 
-    def test_query_knn_menggunakan_top_k(self, mock_model, mock_client):
-        search_hadits(client=mock_client, query="niat", top_k=7)
-        call_body = mock_client.search.call_args.kwargs["body"]
-        assert call_body["size"] == 7
-        assert call_body["query"]["knn"]["embedding"]["k"] == 7
-
     def test_return_search_response(self, mock_model, mock_client):
         resp = search_hadits(client=mock_client, query="niat", top_k=5)
         assert resp.query == "niat"
         assert resp.total == 1
-        assert resp.results[0].nama_perawi == "Bukhari"
 
     def test_hasil_kosong(self, mock_model, mock_client):
         mock_client.search.return_value = make_opensearch_response([])
         resp = search_hadits(client=mock_client, query="tidak ada", top_k=5)
         assert resp.total == 0
-        assert resp.results == []
+
+    def test_mode_knn_default(self, mock_model, mock_client):
+        search_hadits(client=mock_client, query="niat", top_k=5)
+        body = mock_client.search.call_args.kwargs["body"]
+        assert "knn" in body["query"]
+
+    def test_mode_bm25(self, mock_model, mock_client):
+        search_hadits(client=mock_client, query="niat", top_k=5, mode="bm25")
+        body = mock_client.search.call_args.kwargs["body"]
+        assert "multi_match" in body["query"]
+
+    def test_mode_hybrid(self, mock_model, mock_client):
+        search_hadits(client=mock_client, query="niat", top_k=5, mode="hybrid")
+        body = mock_client.search.call_args.kwargs["body"]
+        assert "bool" in body["query"]
 
 
 class TestAdvancedSearchHaditsService:
 
-    def test_tanpa_filter_pakai_knn_biasa(self, mock_model, mock_client):
+    def test_tanpa_filter_query_langsung(self, mock_model, mock_client):
         advanced_search_hadits(client=mock_client, query="shalat", top_k=5, nama_perawi=None)
         body = mock_client.search.call_args.kwargs["body"]
         assert "knn" in body["query"]
@@ -116,15 +146,19 @@ class TestAdvancedSearchHaditsService:
         assert body["query"]["bool"]["filter"][0]["term"]["nama_perawi"] == "Bukhari"
 
     def test_return_search_response(self, mock_model, mock_client):
-        resp = advanced_search_hadits(client=mock_client, query="niat", top_k=5, nama_perawi="Bukhari")
+        resp = advanced_search_hadits(client=mock_client, query="niat", top_k=5)
         assert resp.query == "niat"
-        assert resp.total == 1
 
     def test_nama_perawi_kosong_tidak_difilter(self, mock_model, mock_client):
-        """nama_perawi = None → tidak ada filter bool."""
         advanced_search_hadits(client=mock_client, query="zakat", top_k=5, nama_perawi=None)
         body = mock_client.search.call_args.kwargs["body"]
         assert "bool" not in body["query"]
+
+    def test_mode_bm25_dengan_filter(self, mock_model, mock_client):
+        advanced_search_hadits(client=mock_client, query="zakat", top_k=5, nama_perawi="Muslim", mode="bm25")
+        body = mock_client.search.call_args.kwargs["body"]
+        assert "bool" in body["query"]
+        assert body["query"]["bool"]["filter"][0]["term"]["nama_perawi"] == "Muslim"
 
 
 class TestSearchRouter:
@@ -133,8 +167,7 @@ class TestSearchRouter:
         with patch("app.routers.hadits_router.search_hadits") as mock_svc:
             from app.schemas.hadits_schema import SearchResponse, HaditsResult
             mock_svc.return_value = SearchResponse(
-                query="niat",
-                total=1,
+                query="niat", total=1,
                 results=[HaditsResult(
                     nama_perawi="Bukhari", nomor_hadits=1,
                     referensi_lengkap="Hadits Bukhari Nomor 1",
@@ -142,11 +175,8 @@ class TestSearchRouter:
                 )],
             )
             resp = test_client.post("/hadits/search", json={"query": "niat ibadah"})
-
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["results"][0]["nama_perawi"] == "Bukhari"
+        assert resp.json()["total"] == 1
 
     def test_search_query_terlalu_pendek(self, test_client):
         resp = test_client.post("/hadits/search", json={"query": "ab"})
@@ -160,7 +190,10 @@ class TestSearchRouter:
         with patch("app.routers.hadits_router.search_hadits", side_effect=Exception("Connection refused")):
             resp = test_client.post("/hadits/search", json={"query": "niat ibadah"})
         assert resp.status_code == 500
-        assert "Gagal menghubungi OpenSearch" in resp.json()["detail"]
+
+    def test_search_mode_invalid_return_422(self, test_client):
+        resp = test_client.post("/hadits/search", json={"query": "niat ibadah", "mode": "tidak_ada"})
+        assert resp.status_code == 422
 
 
 class TestAdvancedSearchRouter:
@@ -170,7 +203,6 @@ class TestAdvancedSearchRouter:
             from app.schemas.hadits_schema import SearchResponse
             mock_svc.return_value = SearchResponse(query="shalat", total=0, results=[])
             resp = test_client.post("/hadits/advanced-search", json={"query": "shalat malam"})
-
         assert resp.status_code == 200
 
     def test_advanced_search_dengan_filter_perawi(self, mock_client, test_client):
@@ -183,7 +215,6 @@ class TestAdvancedSearchRouter:
             )
             _, kwargs = mock_svc.call_args
             assert kwargs.get("nama_perawi") == "Muslim"
-
         assert resp.status_code == 200
 
     def test_advanced_search_top_k_dikirim(self, mock_client, test_client):

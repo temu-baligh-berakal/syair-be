@@ -23,7 +23,7 @@ def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
     - **top_k**: jumlah hasil yang ingin dikembalikan (default: 10)
     """
     try:
-        return search_hadits(client=client, query=query.query, top_k=query.top_k)
+        return search_hadits(client=client, query=query.query, top_k=query.top_k, mode=query.mode)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
 
@@ -43,6 +43,7 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
             query=query.query,
             top_k=query.top_k,
             nama_perawi=query.nama_perawi,
+            mode=query.mode,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")

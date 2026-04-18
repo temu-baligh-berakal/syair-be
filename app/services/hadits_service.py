@@ -1,11 +1,14 @@
-# app/services/hadits_service.py
 from sentence_transformers import SentenceTransformer
 from opensearchpy import OpenSearch
 
 from app.config import INDEX_NAME
 from app.schemas.hadits_schema import HaditsResult, SearchResponse
+from app.services.strategies import get_strategy
 
-# Load model sekali saat startup (bukan per-request)
+import app.services.strategies.knn     # noqa: F401
+import app.services.strategies.bm25    # noqa: F401
+import app.services.strategies.hybrid  # noqa: F401
+
 _model: SentenceTransformer | None = None
 
 
@@ -33,25 +36,11 @@ def search_hadits(
     client: OpenSearch,
     query: str,
     top_k: int = 10,
+    mode: str = "knn",
 ) -> SearchResponse:
-    """
-    Pencarian semantik menggunakan KNN embedding.
-    Cocok untuk query bahasa alami seperti "niat dalam beribadah".
-    """
     embedding = get_model().encode(query).tolist()
-
-    body = {
-        "size": top_k,
-        "query": {
-            "knn": {
-                "embedding": {
-                    "vector": embedding,
-                    "k": top_k,
-                }
-            }
-        },
-        "_source": ["nama_perawi", "nomor_hadits", "referensi_lengkap", "arab", "terjemahan"],
-    }
+    strategy = get_strategy(mode)
+    body = strategy.build_query(query_text=query, embedding=embedding, top_k=top_k)
 
     response = client.search(index=INDEX_NAME, body=body)
     hits = response["hits"]["hits"]
@@ -59,48 +48,24 @@ def search_hadits(
     results = [_parse_hit(h, h["_score"]) for h in hits]
     return SearchResponse(query=query, total=len(results), results=results)
 
+
 def advanced_search_hadits(
     client: OpenSearch,
     query: str,
     top_k: int = 10,
     nama_perawi: str | None = None,
+    mode: str = "knn",
 ) -> SearchResponse:
-    """
-    Pencarian semantik dengan filter tambahan.
-    - nama_perawi: filter exact match pada perawi (misal "Bukhari")
-    Menggunakan post_filter agar KNN tetap berjalan lalu hasil difilter.
-    """
     embedding = get_model().encode(query).tolist()
+    strategy = get_strategy(mode)
+    body = strategy.build_query(query_text=query, embedding=embedding, top_k=top_k)
 
-    knn_query: dict = {
-        "knn": {
-            "embedding": {
-                "vector": embedding,
-                "k": top_k,
-            }
-        }
-    }
-
-    filters = []
     if nama_perawi:
-        filters.append({"term": {"nama_perawi": nama_perawi}})
-
-    if filters:
-        body = {
-            "size": top_k,
-            "query": {
-                "bool": {
-                    "must": knn_query,
-                    "filter": filters,
-                }
-            },
-            "_source": ["nama_perawi", "nomor_hadits", "referensi_lengkap", "arab", "terjemahan"],
-        }
-    else:
-        body = {
-            "size": top_k,
-            "query": knn_query,
-            "_source": ["nama_perawi", "nomor_hadits", "referensi_lengkap", "arab", "terjemahan"],
+        body["query"] = {
+            "bool": {
+                "must": body["query"],
+                "filter": [{"term": {"nama_perawi": nama_perawi}}],
+            }
         }
 
     response = client.search(index=INDEX_NAME, body=body)

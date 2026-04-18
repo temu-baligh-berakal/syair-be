@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
+
+from app.services.strategies import get_available_modes
 
 
 class SearchQuery(BaseModel):
@@ -21,6 +23,19 @@ class SearchQuery(BaseModel):
         description="Filter berdasarkan nama perawi, misal: 'Bukhari', 'Muslim'",
         examples=["Bukhari"],
     )
+    mode: str = Field(
+        default="knn",
+        description="Mode pencarian — nilai yang tersedia diambil dari registry strategy",
+        examples=["knn", "bm25", "hybrid"],
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        available = get_available_modes()
+        if v not in available:
+            raise ValueError(f"Mode '{v}' tidak tersedia. Pilihan: {available}")
+        return v
 
 
 class HaditsResult(BaseModel):
