@@ -1,0 +1,23 @@
+name: Deploy Backend Ke EC2
+on:
+  push:
+    branches: ["main"]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Menjalankan eksekusi SSH ke Server EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "1. Narik kode backend terbaru..."
+            cd /home/ubuntu/syair-project/syair-be
+            git pull origin main
+
+            echo "2. Re-build dan Restart khusus layanan backend..."
+            cd /home/ubuntu/syair-project
+
+            docker compose up -d --build backend
