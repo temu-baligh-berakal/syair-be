@@ -44,6 +44,7 @@ def mock_model():
 def mock_client():
     client = MagicMock()
     client.search.return_value = make_opensearch_response([FAKE_HIT])
+    client.count.return_value = {"count": 1}
     return client
 
 
@@ -106,6 +107,25 @@ class TestSearchHaditsService:
         search_hadits(client=mock_client, query="niat ibadah", top_k=5)
         mock_client.search.assert_called_once()
 
+    def test_top_k_dibatasi_jumlah_dokumen_tersedia(self, mock_model, mock_client):
+        mock_client.count.return_value = {"count": 3}
+
+        search_hadits(client=mock_client, query="niat ibadah", top_k=50)
+
+        body = mock_client.search.call_args.kwargs["body"]
+        assert body["size"] == 3
+
+        if "knn" in body["query"]:
+            assert body["query"]["knn"]["embedding"]["k"] == 3
+
+    def test_jika_dokumen_tidak_ada_return_kosong_tanpa_search(self, mock_model, mock_client):
+        mock_client.count.return_value = {"count": 0}
+
+        resp = search_hadits(client=mock_client, query="tidak ada", top_k=50)
+
+        assert resp.total == 0
+        mock_client.search.assert_not_called()
+
     def test_return_search_response(self, mock_model, mock_client):
         resp = search_hadits(client=mock_client, query="niat", top_k=5)
         assert resp.query == "niat"
@@ -159,6 +179,22 @@ class TestAdvancedSearchHaditsService:
         body = mock_client.search.call_args.kwargs["body"]
         assert "bool" in body["query"]
         assert body["query"]["bool"]["filter"][0]["term"]["nama_perawi"] == "Muslim"
+
+    def test_advanced_search_top_k_dibatasi_dengan_filter(self, mock_model, mock_client):
+        mock_client.count.return_value = {"count": 2}
+
+        advanced_search_hadits(
+            client=mock_client,
+            query="zakat",
+            top_k=50,
+            nama_perawi="Muslim",
+            mode="knn",
+        )
+
+        body = mock_client.search.call_args.kwargs["body"]
+        assert body["size"] == 2
+        assert body["query"]["bool"]["filter"][0]["term"]["nama_perawi"] == "Muslim"
+        assert body["query"]["bool"]["must"]["knn"]["embedding"]["k"] == 2
 
 
 class TestSearchRouter:
