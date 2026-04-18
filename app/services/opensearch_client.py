@@ -1,8 +1,6 @@
-# app/services/opensearch_client.py
 from opensearchpy import OpenSearch
 from ..config import OPENSEARCH_HOST, OPENSEARCH_PORT, OPENSEARCH_USER, OPENSEARCH_PASS
 
-# Singleton client — dibuat sekali, dipakai berulang
 _client: OpenSearch | None = None
 
 
