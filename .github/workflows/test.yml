@@ -1,12 +1,15 @@
-name: Deploy Backend Ke EC2
+name: Test Backend
 
 on:
   push:
+    branches: ["main", "dev"]
+  pull_request:
     branches: ["main"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout kode
         uses: actions/checkout@v4
@@ -29,23 +32,3 @@ jobs:
 
       - name: Jalankan semua test
         run: python -m pytest tests/ -v --tb=short
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Menjalankan eksekusi SSH ke Server EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            echo "1. Narik kode backend terbaru..."
-            cd /home/ubuntu/syair/syair-be
-            git pull origin main
-
-            echo "2. Re-build dan Restart khusus layanan backend..."
-            cd /home/ubuntu/syair
-
-            docker compose up -d --build backend
