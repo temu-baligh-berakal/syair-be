@@ -14,10 +14,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             echo "1. Narik kode backend terbaru..."
-            cd /home/ubuntu/syair-project/syair-be
+            cd /home/ubuntu/syair/syair-be
             git pull origin main
 
             echo "2. Re-build dan Restart khusus layanan backend..."
-            cd /home/ubuntu/syair-project
+            cd /home/ubuntu/syair
 
             docker compose up -d --build backend
