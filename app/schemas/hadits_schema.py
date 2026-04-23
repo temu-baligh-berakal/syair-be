@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional, List
 
 from app.services.strategies import get_available_modes
 
@@ -49,7 +49,32 @@ class HaditsResult(BaseModel):
     score: float = Field(description="Skor kemiripan semantik dari OpenSearch (0.0-1.0)")
 
 
+class HaditsResultForSummarizer(BaseModel):
+    nama_perawi: str = Field(description="Nama perawi hadits, misal: 'Bukhari'")
+    nomor_hadits: int = Field(description="Nomor hadits dalam kitab")
+    referensi_lengkap: str = Field(
+        description="Referensi lengkap, misal: 'Hadits Bukhari Nomor 1'"
+    )
+    terjemahan: str = Field(description="Terjemahan hadits dalam bahasa Indonesia")
+
+
 class SearchResponse(BaseModel):
     query: str = Field(description="Query yang dikirim user")
     total: int = Field(description="Jumlah hasil yang ditemukan")
     results: list[HaditsResult] = Field(description="Daftar hadits yang relevan")
+
+
+class LLMSummarizerRequest(BaseModel):
+    query: str = Field(
+        ...,
+        min_length=3,
+        max_length=500,
+        description="Teks pencarian asli dalam bahasa Indonesia",
+        examples=["shalat berjamaah lebih utama dari shalat sendirian"],
+    )
+    hadits_results: List[HaditsResultForSummarizer] = Field(
+        ...,
+        min_length=1,
+        max_length=3,
+        description="Daftar 1-3 hadits yang akan diringkas",
+    )
