@@ -235,7 +235,9 @@ class TestSearchRouter:
                 results=[HaditsResult(
                     nama_perawi="Bukhari", nomor_hadits=1,
                     referensi_lengkap="Hadits Bukhari Nomor 1",
-                    arab="...", terjemahan="...", score=0.9,
+                    arab="...", terjemahan="...", 
+                    preview="...",
+                    score=0.9,
                 )],
             )
             resp = test_client.post("/hadits/search", json={"query": "niat ibadah"})
