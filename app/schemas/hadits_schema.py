@@ -55,6 +55,12 @@ class HaditsResult(BaseModel):
     )
     arab: str = Field(description="Teks Arab hadits")
     terjemahan: str = Field(description="Terjemahan hadits dalam bahasa Indonesia")
+    
+    # ATRIBUT BARU:
+    preview: str = Field(
+        description="Kutipan pendek bergaya Google dengan **highlight** pada query yang cocok (mendukung stemming)."
+    )
+    
     score: float = Field(description="Skor kemiripan semantik dari OpenSearch (0.0-1.0)")
 
 
