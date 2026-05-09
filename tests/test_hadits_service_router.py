@@ -8,6 +8,17 @@ from app.routers.hadits_router import get_client
 from app.services.hadits_service import _parse_hit, search_hadits, advanced_search_hadits
 from app.services.strategies import get_strategy, get_available_modes
 
+<<<<<<< HEAD
+=======
+# Import strategies agar terdaftar
+import app.services.strategies.knn     # noqa: F401
+import app.services.strategies.bm25    # noqa: F401
+import app.services.strategies.hybrid  # noqa: F401
+
+import os
+
+os.environ["GROQ_API_KEY_1"] = "dummy_mock_key_untuk_testing_saja"
+>>>>>>> 6cb3231 (feat: set dummy GROQ API key for testing in hadits service router tests)
 
 FAKE_EMBEDDING = np.zeros(384)
 
