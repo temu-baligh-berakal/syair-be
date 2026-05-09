@@ -11,23 +11,47 @@ import app.services.strategies.hybrid  # noqa: F401
 
 _model: SentenceTransformer | None = None
 
-
 def get_model() -> SentenceTransformer:
     global _model
     if _model is None:
         _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _model
 
-
 def _parse_hit(hit: dict, score: float) -> HaditsResult:
-    """Konversi satu hit OpenSearch menjadi HaditsResult."""
+    """Konversi satu hit OpenSearch menjadi HaditsResult dan ekstrak Highlight."""
     src = hit["_source"]
+    terjemahan_asli = src.get("terjemahan", "")
+    
+    # 1. Coba ambil highlight dari OpenSearch (Akan ada jika mode BM25 / Hybrid)
+    highlights = hit.get("highlight", {}).get("terjemahan", [])
+    
+    if highlights:
+        preview_raw = highlights[0]
+        clean_preview = preview_raw.replace("**", "")
+        
+        preview = preview_raw
+        
+        # Tambahkan elipsis (...) di awal jika kutipan tidak dimulai dari awal kalimat
+        if len(clean_preview) > 20 and not terjemahan_asli.startswith(clean_preview[:20]):
+            preview = f"...{preview}"
+            
+        # Tambahkan elipsis (...) di akhir jika kutipan terpotong sebelum akhir kalimat
+        if len(clean_preview) > 20 and not terjemahan_asli.endswith(clean_preview[-20:]):
+            preview = f"{preview}..."
+            
+    else:
+        # 2. Fallback: Jika mode pure KNN (tidak ada exact text match) atau text terlalu pendek
+        preview = terjemahan_asli[:300].strip()
+        if len(terjemahan_asli) > 300:
+            preview += "..."
+
     return HaditsResult(
         nama_perawi=src.get("nama_perawi", ""),
         nomor_hadits=src.get("nomor_hadits", 0),
         referensi_lengkap=src.get("referensi_lengkap", ""),
         arab=src.get("arab", ""),
-        terjemahan=src.get("terjemahan", ""),
+        terjemahan=terjemahan_asli,
+        preview=preview,  # Masukkan preview ke response
         score=score,
     )
 
@@ -73,12 +97,23 @@ def search_hadits(
     strategy = get_strategy(mode)
     body = strategy.build_query(query_text=query, embedding=embedding, top_k=effective_top_k)
 
+    # TAMBAHKAN KONFIGURASI HIGHLIGHTING KE OPENSEARCH
+    body["highlight"] = {
+        "pre_tags": ["**"],  # Tag pembuka markdown bold
+        "post_tags": ["**"], # Tag penutup markdown bold
+        "fields": {
+            "terjemahan": {
+                "fragment_size": 300, # Batasi sekitar 160 karakter (Standar Google Snippet)
+                "number_of_fragments": 1 # Ambil 1 kutipan terbaik saja
+            }
+        }
+    }
+
     response = client.search(index=INDEX_NAME, body=body)
     hits = response["hits"]["hits"]
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
     return SearchResponse(query=query, total=len(results), results=results)
-
 
 def advanced_search_hadits(
     client: OpenSearch,
@@ -99,6 +134,18 @@ def advanced_search_hadits(
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
     body = strategy.build_query(query_text=query, embedding=embedding, top_k=effective_top_k)
+
+    # TAMBAHKAN KONFIGURASI HIGHLIGHTING KE OPENSEARCH
+    body["highlight"] = {
+        "pre_tags": ["**"],
+        "post_tags": ["**"],
+        "fields": {
+            "terjemahan": {
+                "fragment_size": 300,
+                "number_of_fragments": 1
+            }
+        }
+    }
 
     if nama_perawi:
         body["query"] = {
