@@ -45,7 +45,9 @@ jobs:
             cd /home/ubuntu/syair/syair-be
             git pull origin main
 
+            echo "1.5 Membersihkan sampah Docker dan Cache yang menumpuk..."
+            docker system prune -af --volumes
+
             echo "2. Re-build dan Restart khusus layanan backend..."
             cd /home/ubuntu/syair
-
             docker compose up -d --build backend
