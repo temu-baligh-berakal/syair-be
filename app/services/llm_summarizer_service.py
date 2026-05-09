@@ -29,14 +29,16 @@ def get_next_api_key() -> str:
         return key
 
 def summarize_hadits(request: LLMSummarizerRequest) -> str:
+    top_3_hadits = request.hadits_results[:3]
+
     api_key = get_next_api_key()
     client = Groq(api_key=api_key)
 
-    # Format data konteks dengan rapi
+    # Format data konteks dengan rapi (Gunakan top_3_hadits, bukan request.hadits_results)
     hadits_text = "\n\n".join(
         [
             f"[Dokumen {i+1}] - Perawi: {h.nama_perawi}\nTeks: {h.terjemahan}"
-            for i, h in enumerate(request.hadits_results)
+            for i, h in enumerate(top_3_hadits)
         ]
     )
 
@@ -72,7 +74,7 @@ Buatlah ringkasan berdasarkan aturan yang telah ditetapkan."""
             }
         ],
         model="llama-3.3-70b-versatile",
-        temperature=0.2, # Diturunkan ke 0.2 agar lebih analitis, kaku pada fakta, dan tidak berhalusinasi
+        temperature=0.2, 
         max_tokens=1024,
     )
 
