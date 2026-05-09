@@ -13,6 +13,9 @@ import app.services.strategies.knn     # noqa: F401
 import app.services.strategies.bm25    # noqa: F401
 import app.services.strategies.hybrid  # noqa: F401
 
+import os
+
+os.environ["GROQ_API_KEY_1"] = "dummy_mock_key_untuk_testing_saja"
 
 FAKE_EMBEDDING = np.zeros(384)
 
