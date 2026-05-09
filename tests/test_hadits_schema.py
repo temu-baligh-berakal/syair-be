@@ -86,6 +86,7 @@ HADITS_VALID = {
     "referensi_lengkap": "Hadits Bukhari Nomor 1",
     "arab": "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ",
     "terjemahan": "Sesungguhnya setiap amalan tergantung pada niatnya.",
+    "preview": "Sesungguhnya setiap amalan tergantung pada **niatnya**...",
     "score": 0.95,
 }
 
