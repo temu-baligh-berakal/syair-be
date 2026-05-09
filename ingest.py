@@ -9,6 +9,27 @@ import re
 from app.config import INDEX_NAME
 from app.services.opensearch_client import get_opensearch_client
 
+def extract_clean_text(text):
+    """
+    Ekstrak isi hadits dengan membuang sanad berdasarkan pola 
+    tanda petik ganda (") ATAU kata transisi 'bahwa/sanya'.
+    """
+    if pd.isna(text):
+        return ""
+    
+    # 1. Coba pola tanda petik (Prioritas Utama)
+    match = re.search(r'"([^"]*)"', text)
+    if match:
+        return match.group(1).strip()
+    
+    # 2. Fallback ke pola "bahwa" jika tanda petik tidak ada
+    if "bahwa" in text.lower() or "bahwasanya" in text.lower():
+        parts = re.split(r'bahwasanya|bahwa', text, flags=re.IGNORECASE)
+        return parts[-1].strip()
+    
+    # 3. Kembalikan teks asli jika tidak ada pola (kasus NEITHER)
+    return text.strip()
+
 def create_index(client, index_name):
     """Membuat index dengan engine lucene (OpenSearch 3.0+ compatible)"""
     index_body = {
@@ -23,14 +44,21 @@ def create_index(client, index_name):
                 "nomor_hadits": {"type": "integer"}, 
                 "referensi_lengkap": {"type": "keyword"},
                 "arab": {"type": "text"},
-                "terjemahan": {"type": "text"},
+                
+                # --- PERUBAHAN UTAMA: INDONESIAN ANALYZER ---
+                "terjemahan": {
+                    "type": "text",
+                    "analyzer": "indonesian" # Mengaktifkan stemming & stop-words
+                },
+                # --------------------------------------------
+                
                 "embedding": {
                     "type": "knn_vector",
                     "dimension": 384,
                     "method": {
                         "name": "hnsw",
-                        "space_type": "cosinesimil", # Gunakan l2 atau cosinesimil
-                        "engine": "lucene",           # FIX: Ganti nmslib ke lucene
+                        "space_type": "cosinesimil", 
+                        "engine": "lucene",           
                         "parameters": {
                             "ef_construction": 128,
                             "m": 16
@@ -46,7 +74,7 @@ def create_index(client, index_name):
         client.indices.delete(index=index_name)
     
     client.indices.create(index=index_name, body=index_body)
-    print(f"Index '{index_name}' berhasil dibuat dengan engine Lucene!")
+    print(f"Index '{index_name}' berhasil dibuat dengan engine Lucene dan Indonesian Analyzer!")
 
 def run_etl():
     print("1. Memuat Model AI (paraphrase-multilingual-MiniLM-L12-v2)...")
@@ -58,18 +86,16 @@ def run_etl():
     # Drop baris kosong
     df = df.dropna(subset=['Terjemahan', 'Arab', 'Perawi'])
     
-    # --- PROSES EKSTRAKSI REGEX ---
-    # Asumsi format: 'Hadits {Perawi} Nomor {i}'
-    # Regex ini akan menangkap kata/kalimat di tengah (nama_perawi) dan angka di akhir (nomor)
+    # --- PROSES EKSTRAKSI REGEX PERAWI & NOMOR ---
     extracted = df['Perawi'].str.extract(r'(?i)Hadits\s+(.*?)\s+Nomor\s+(\d+)')
-    
-    # Memasukkan hasil ekstraksi ke kolom baru
     df['nama_perawi'] = extracted[0].fillna("Tidak Diketahui")
     df['nomor_hadits'] = extracted[1].fillna(0).astype(int)
-    # ------------------------------
-
+    
+    # --- PROSES PEMBERSIHAN SANAD UNTUK EMBEDDING ---
     df['Arab'] = df['Arab'].astype(str)
     df['Terjemahan'] = df['Terjemahan'].astype(str)
+    print("Membersihkan sanad dari teks terjemahan...")
+    df['teks_bersih'] = df['Terjemahan'].apply(extract_clean_text)
     
     total_docs = len(df)
     print(f"Total dokumen siap diproses: {total_docs}")
@@ -85,7 +111,8 @@ def run_etl():
     for i in tqdm(range(0, total_docs, batch_size), desc="Ingesting Data"):
         batch_df = df.iloc[i:i+batch_size]
         
-        teks_list = batch_df['Terjemahan'].tolist()
+        # KUNCI KNN: Embedding dilakukan pada teks yang sudah dibersihkan dari sanad
+        teks_list = batch_df['teks_bersih'].tolist()
         embeddings = model.encode(teks_list, show_progress_bar=False)
         
         actions = []
@@ -95,9 +122,9 @@ def run_etl():
                 "_source": {
                     "nama_perawi": row['nama_perawi'],
                     "nomor_hadits": row['nomor_hadits'],
-                    "referensi_lengkap": row['Perawi'], # Tetap simpan aslinya misal "Hadits Bukhari Nomor 1"
+                    "referensi_lengkap": row['Perawi'], 
                     "arab": row['Arab'],
-                    "terjemahan": row['Terjemahan'],
+                    "terjemahan": row['Terjemahan'], # Teks utuh disimpan untuk Highlighting & BM25
                     "embedding": embeddings[j].tolist()
                 }
             }
