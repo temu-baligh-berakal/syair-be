@@ -9,9 +9,6 @@ from app.services.hadits_service import _parse_hit, search_hadits, advanced_sear
 from app.services.strategies import get_strategy, get_available_modes
 
 
-import os
-
-os.environ["GROQ_API_KEY_1"] = "dummy_mock_key_untuk_testing_saja"
 
 FAKE_EMBEDDING = np.zeros(384)
 
