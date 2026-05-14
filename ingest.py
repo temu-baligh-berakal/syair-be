@@ -36,7 +36,43 @@ def create_index(client, index_name):
         "settings": {
             "index.knn": True,
             "number_of_shards": 1,
-            "number_of_replicas": 0
+            "number_of_replicas": 0,
+            "analysis": {
+                "filter": {
+                    "islamic_synonyms": {
+                        "type": "synonym",
+                        "synonyms": [
+                            "shalat, sholat, salat",
+                            "hadits, hadis",
+                            "wudhu, wudu",
+                            "dzikir, zikir",
+                            "shadaqah, sedekah",
+                            "puasa, shaum",
+                            "zakat, jakat"
+                        ]
+                    },
+                    "indonesian_stop": {
+                        "type": "stop",
+                        "stopwords": "_indonesian_"
+                    },
+                    "indonesian_stemmer": {
+                        "type": "stemmer",
+                        "language": "indonesian"
+                    }
+                },
+                "analyzer": {
+                    "indonesian_with_synonyms": {
+                        "type": "custom",
+                        "tokenizer": "standard",
+                        "filter": [
+                            "lowercase",
+                            "islamic_synonyms",
+                            "indonesian_stop",
+                            "indonesian_stemmer"
+                        ]
+                    }
+                }
+            }
         },
         "mappings": {
             "properties": {
@@ -45,12 +81,13 @@ def create_index(client, index_name):
                 "referensi_lengkap": {"type": "keyword"},
                 "arab": {"type": "text"},
                 
-                # --- PERUBAHAN UTAMA: INDONESIAN ANALYZER ---
+                # --- PERUBAHAN UTAMA: CUSTOM ANALYZER DENGAN SINONIM ---
                 "terjemahan": {
                     "type": "text",
-                    "analyzer": "indonesian" # Mengaktifkan stemming & stop-words
+                    "analyzer": "indonesian_with_synonyms",
+                    "search_analyzer": "indonesian_with_synonyms"
                 },
-                # --------------------------------------------
+                # ----------------------------------------------------
                 
                 "embedding": {
                     "type": "knn_vector",

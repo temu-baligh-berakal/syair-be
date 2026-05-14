@@ -18,6 +18,8 @@ class Bm25Strategy(QueryStrategy):
                     "fields": ["terjemahan^2", "arab"],
                     "type": "best_fields",
                     "fuzziness": "AUTO",
+                    "operator": "and",
+                    "minimum_should_match": "75%",
                 }
             },
             "_source": SOURCE_FIELDS,

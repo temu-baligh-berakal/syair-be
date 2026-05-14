@@ -30,6 +30,8 @@ class HybridStrategy(QueryStrategy):
                                 "fields": ["terjemahan^2", "arab"],
                                 "boost": 0.3,
                                 "fuzziness": "AUTO",
+                                "operator": "and",
+                                "minimum_should_match": "75%",
                             }
                         },
                     ]
