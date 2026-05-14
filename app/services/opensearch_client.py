@@ -13,6 +13,7 @@ def get_opensearch_client() -> OpenSearch:
             http_compress=True,
             http_auth=(OPENSEARCH_USER, OPENSEARCH_PASS),
             use_ssl=True,
+            timeout=60,
             verify_certs=False,
             ssl_assert_hostname=False,
             ssl_show_warn=False,
