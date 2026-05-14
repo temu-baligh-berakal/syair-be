@@ -91,5 +91,5 @@ class LLMSummarizerRequest(BaseModel):
     hadits_results: List[HaditsResultForSummarizer] = Field(
         ...,
         min_length=1,
-        description="Daftar 1-3 hadits yang akan diringkas",
+        description="Daftar 1-10 hadits yang akan diringkas",
     )
