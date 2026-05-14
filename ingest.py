@@ -146,7 +146,7 @@ def run_etl():
     create_index(client, INDEX_NAME)
 
     print("3. Memulai proses Embedding dan Bulk Indexing...")
-    batch_size = 256
+    batch_size = 128
     
     start_time = time.time()
     

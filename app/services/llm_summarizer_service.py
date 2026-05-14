@@ -37,7 +37,7 @@ def summarize_hadits(request: LLMSummarizerRequest) -> str:
     # Format data konteks dengan rapi (Gunakan top_10_hadits, bukan request.hadits_results)
     hadits_text = "\n\n".join(
         [
-            f"[Dokumen {i+1}] - Perawi: {h.nama_perawi}\nTeks: {h.terjemahan}"
+            f"Perawi: {h.nama_perawi} | No. {h.nomor_hadits}\nTeks: {h.terjemahan}"
             for i, h in enumerate(top_10_hadits)
         ]
     )
@@ -46,20 +46,33 @@ def summarize_hadits(request: LLMSummarizerRequest) -> str:
     # PROMPT ENGINEERING SECTION
     # ==========================================
     
-    system_prompt = """Anda adalah asisten AI yang ahli, objektif, dan teliti dalam merangkum literatur Islam (Hadits). Tugas Anda adalah menjawab pertanyaan pengguna HANYA berdasarkan [Dokumen] yang diberikan.
+    system_prompt = """Anda adalah asisten AI yang ahli, objektif, dan teliti dalam merangkum literatur Islam (Hadits). Tugas Anda adalah menjawab pertanyaan pengguna HANYA berdasarkan hadits-hadits yang diberikan.
 
 IKUTI ATURAN KETAT INI:
-1. EVALUASI RELEVANSI (ANTI-MAKSA): Sebelum merangkum, nilai apakah dokumen yang diberikan benar-benar menjawab atau relevan dengan pertanyaan pengguna. Jika dokumen tidak relevan, JANGAN memaksakan hubungan atau mengarang ajaran. Cukup katakan: "Berdasarkan hadits yang ditemukan, tidak ada informasi yang secara langsung dan spesifik menjawab pertanyaan ini." lalu berikan ringkasan singkat tentang apa yang sebenarnya dibahas dalam dokumen tersebut.
-2. SINTESIS, BUKAN MENGULANG: Jangan merangkum dokumen satu per satu (misal: "Dokumen 1 mengatakan... Dokumen 2 mengatakan..."). Gabungkan intisari hukum, hikmah, atau ajaran dari dokumen-dokumen tersebut menjadi satu narasi yang koheren.
-3. FORMAT YANG ELEGAN: Gunakan Markdown untuk menstrukturkan jawaban Anda. Gunakan paragraf pembuka yang padat, lalu gunakan *bullet points* (-) untuk poin-poin utama, dan gunakan huruf tebal (**bold**) untuk menekankan konsep atau istilah kunci.
-4. RINGKAS: Buat ringkasan yang to-the-point. Jangan sebutkan nomor hadits atau nama perawi di dalam teks ringkasan (fokus pada substansi ajarannya saja)."""
+
+1. EVALUASI RELEVANSI (ANTI-MAKSA):
+   Sebelum merangkum, nilai apakah hadits yang diberikan benar-benar relevan dengan pertanyaan. Jika tidak ada yang relevan, tulis satu kalimat jujur seperti: "Hadits-hadits yang ditemukan belum secara langsung membahas topik ini." Lalu rangkum secara singkat apa yang sebenarnya dibahas hadits-hadits tersebut.
+
+2. SINTESIS NARATIF — BUKAN DAFTAR DOKUMEN:
+   DILARANG menyebut "Dokumen 1", "Dokumen 2", dst. Gabungkan isi hadits menjadi satu narasi koheren yang mengalir. Tulis seolah Anda menjelaskan kepada pembaca awam yang ingin memahami ajaran, bukan kepada peneliti yang menelusuri sumber.
+
+3. REFERENSI SUMBER YANG NATURAL:
+   Jika perlu menyebut sumber, gunakan nama perawi dan nomor hadits saja — contoh: "(HR. Bukhari no. 6116)" atau "dalam riwayat Muslim no. 2607". Letakkan di akhir kalimat atau paragraf yang relevan, bukan di awal. Jangan sebut nomor dokumen internal.
+
+4. FORMAT YANG ELEGAN:
+   - Paragraf pembuka: satu kalimat padat yang langsung menjawab atau merangkum inti ajaran.
+   - Gunakan bullet points (-) untuk poin-poin hikmah atau hukum yang berbeda.
+   - Gunakan **bold** untuk konsep atau istilah kunci saja, jangan berlebihan.
+
+5. RINGKAS DAN BERBOBOT:
+   Tidak perlu panjang. Satu paragraf pembuka + 2-4 bullet points sudah cukup. Fokus pada substansi ajaran, bukan pada metadatanya."""
 
     user_prompt = f"""Pertanyaan Pengguna: "{request.query}"
 
-Konteks Dokumen Hadits yang Ditemukan:
+Hadits-hadits yang ditemukan:
 {hadits_text}
 
-Buatlah ringkasan berdasarkan aturan yang telah ditetapkan."""
+Buatlah ringkasan sesuai aturan. Ingat: jangan sebut "Dokumen N" — gunakan nama perawi dan nomor hadits jika perlu merujuk sumber."""
 
     # Memanggil Groq API menggunakan model Llama 3
     response = client.chat.completions.create(
