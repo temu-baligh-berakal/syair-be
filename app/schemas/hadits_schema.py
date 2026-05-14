@@ -12,11 +12,16 @@ class SearchQuery(BaseModel):
         description="Teks pencarian dalam bahasa Indonesia",
         examples=["shalat berjamaah lebih utama dari shalat sendirian"],
     )
-    top_k: int = Field(
+    page: int = Field(
+        default=1,
+        ge=1,
+        description="Nomor halaman untuk pagination (mulai dari 1)",
+    )
+    page_size: int = Field(
         default=10,
         ge=1,
         le=50,
-        description="Jumlah hasil yang dikembalikan (1-50)",
+        description="Jumlah hasil per halaman (1-50)",
     )
     nama_perawi: Optional[str] = Field(
         default=None,
@@ -27,6 +32,10 @@ class SearchQuery(BaseModel):
         default="knn",
         description="Mode pencarian — nilai yang tersedia diambil dari registry strategy",
         examples=["knn", "bm25", "hybrid"],
+    )
+    threshold: Optional[float] = Field(
+        default=None,
+        description="Ambang batas (threshold) skor minimum. Jika None, menggunakan default berdasarkan mode.",
     )
 
     @field_validator("mode")
@@ -67,6 +76,7 @@ class HaditsResultForSummarizer(BaseModel):
 class SearchResponse(BaseModel):
     query: str = Field(description="Query yang dikirim user")
     total: int = Field(description="Jumlah hasil yang ditemukan")
+    suggestion: Optional[str] = Field(default=None, description="Saran perbaikan kata (typo fix), misal 'shalat'")
     results: list[HaditsResult] = Field(description="Daftar hadits yang relevan")
 
 

@@ -20,10 +20,18 @@ def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
     Cari hadits menggunakan pencarian semantik (KNN embedding).
 
     - **query**: kalimat pencarian dalam bahasa Indonesia
-    - **top_k**: jumlah hasil yang ingin dikembalikan (default: 10)
+    - **page**: nomor halaman (default: 1)
+    - **page_size**: jumlah hasil per halaman (default: 10)
     """
     try:
-        return search_hadits(client=client, query=query.query, top_k=query.top_k, mode=query.mode)
+        return search_hadits(
+            client=client, 
+            query=query.query, 
+            page=query.page,
+            page_size=query.page_size,
+            mode=query.mode,
+            threshold=query.threshold
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
 
@@ -34,16 +42,19 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
     Cari hadits dengan filter tambahan di atas pencarian semantik.
 
     - **query**: kalimat pencarian dalam bahasa Indonesia
-    - **top_k**: jumlah hasil (default: 10)
+    - **page**: nomor halaman (default: 1)
+    - **page_size**: jumlah hasil per halaman (default: 10)
     - **nama_perawi**: filter perawi, misal `Bukhari`, `Muslim`, `Tirmidzi`
     """
     try:
         return advanced_search_hadits(
             client=client,
             query=query.query,
-            top_k=query.top_k,
+            page=query.page,
+            page_size=query.page_size,
             nama_perawi=query.nama_perawi,
             mode=query.mode,
+            threshold=query.threshold,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")

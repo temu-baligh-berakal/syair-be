@@ -7,14 +7,19 @@ SOURCE_FIELDS = ["nama_perawi", "nomor_hadits", "referensi_lengkap", "arab", "te
 class Bm25Strategy(QueryStrategy):
     """Pencarian keyword menggunakan BM25 full-text search."""
 
-    def build_query(self, query_text: str, embedding: list[float], top_k: int) -> dict:
+    def build_query(self, query_text: str, embedding: list[float], page: int, page_size: int) -> dict:
+        from_index = (page - 1) * page_size
         return {
-            "size": top_k,
+            "from": from_index,
+            "size": page_size,
             "query": {
                 "multi_match": {
                     "query": query_text,
                     "fields": ["terjemahan^2", "arab"],
                     "type": "best_fields",
+                    "fuzziness": "AUTO",
+                    "operator": "and",
+                    "minimum_should_match": "75%",
                 }
             },
             "_source": SOURCE_FIELDS,

@@ -14,15 +14,19 @@ class TestSearchQuery:
     def test_valid_query_minimal(self):
         q = SearchQuery(query="shalat berjamaah")
         assert q.query == "shalat berjamaah"
-        assert q.top_k == 10
+        assert q.page == 1
+        assert q.page_size == 10
         assert q.nama_perawi is None
         assert q.mode == "knn"
+        assert q.threshold is None
 
     def test_valid_query_lengkap(self):
-        q = SearchQuery(query="keutamaan puasa", top_k=5, nama_perawi="Bukhari", mode="bm25")
-        assert q.top_k == 5
+        q = SearchQuery(query="keutamaan puasa", page=2, page_size=20, nama_perawi="Bukhari", mode="bm25", threshold=5.0)
+        assert q.page == 2
+        assert q.page_size == 20
         assert q.nama_perawi == "Bukhari"
         assert q.mode == "bm25"
+        assert q.threshold == 5.0
 
     def test_query_terlalu_pendek(self):
         with pytest.raises(ValidationError) as exc_info:
@@ -38,21 +42,37 @@ class TestSearchQuery:
         with pytest.raises(ValidationError):
             SearchQuery()
 
-    def test_top_k_minimum(self):
-        q = SearchQuery(query="zakat fitrah", top_k=1)
-        assert q.top_k == 1
+    def test_page_minimum(self):
+        q = SearchQuery(query="zakat fitrah", page=1)
+        assert q.page == 1
 
-    def test_top_k_maksimum(self):
-        q = SearchQuery(query="zakat fitrah", top_k=50)
-        assert q.top_k == 50
-
-    def test_top_k_nol_gagal(self):
+    def test_page_nol_gagal(self):
         with pytest.raises(ValidationError):
-            SearchQuery(query="zakat fitrah", top_k=0)
+            SearchQuery(query="zakat fitrah", page=0)
 
-    def test_top_k_lebih_dari_50_gagal(self):
+    def test_page_size_minimum(self):
+        q = SearchQuery(query="zakat fitrah", page_size=1)
+        assert q.page_size == 1
+
+    def test_page_size_maksimum(self):
+        q = SearchQuery(query="zakat fitrah", page_size=50)
+        assert q.page_size == 50
+
+    def test_page_size_nol_gagal(self):
         with pytest.raises(ValidationError):
-            SearchQuery(query="zakat fitrah", top_k=51)
+            SearchQuery(query="zakat fitrah", page_size=0)
+
+    def test_page_size_lebih_dari_50_gagal(self):
+        with pytest.raises(ValidationError):
+            SearchQuery(query="zakat fitrah", page_size=51)
+
+    def test_threshold_opsional_none(self):
+        q = SearchQuery(query="sedekah jariyah")
+        assert q.threshold is None
+
+    def test_threshold_diisi(self):
+        q = SearchQuery(query="sedekah jariyah", threshold=0.8)
+        assert q.threshold == 0.8
 
     def test_nama_perawi_opsional_none(self):
         q = SearchQuery(query="sedekah jariyah")
