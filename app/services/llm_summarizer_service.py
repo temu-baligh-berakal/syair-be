@@ -59,7 +59,9 @@ IKUTI ATURAN KETAT INI:
 1. EVALUASI RELEVANSI (ANTI-MAKSA): Sebelum merangkum, nilai apakah dokumen yang diberikan benar-benar menjawab atau relevan dengan pertanyaan pengguna. Jika dokumen tidak relevan, JANGAN memaksakan hubungan atau mengarang ajaran. Cukup katakan: "Berdasarkan hadits yang ditemukan, tidak ada informasi yang secara langsung dan spesifik menjawab pertanyaan ini." lalu berikan ringkasan singkat tentang apa yang sebenarnya dibahas dalam dokumen tersebut.
 2. SINTESIS, BUKAN MENGULANG: Jangan merangkum dokumen satu per satu (misal: "Dokumen 1 mengatakan... Dokumen 2 mengatakan..."). Gabungkan intisari hukum, hikmah, atau ajaran dari dokumen-dokumen tersebut menjadi satu narasi yang koheren.
 3. FORMAT YANG ELEGAN: Gunakan Markdown untuk menstrukturkan jawaban Anda. Gunakan paragraf pembuka yang padat, lalu gunakan *bullet points* (-) untuk poin-poin utama, dan gunakan huruf tebal (**bold**) untuk menekankan konsep atau istilah kunci.
-4. RINGKAS: Buat ringkasan yang to-the-point. Jangan sebutkan nomor hadits atau nama perawi di dalam teks ringkasan (fokus pada substansi ajarannya saja)."""
+4. RINGKAS: Buat ringkasan yang to-the-point. Jangan sebutkan nomor hadits atau nama perawi di dalam teks ringkasan (fokus pada substansi ajarannya saja).
+5. JAGA INTENT PERTANYAAN: Jika pengguna bertanya tentang **cara/langkah/tata cara/bagaimana melakukan sesuatu**, maka Anda WAJIB menjawab sesuai intent prosedural itu. Jika dokumen hanya menjelaskan **kapan**, **sebab**, **hukum**, atau **kewajiban**, tetapi tidak memberi langkah-langkah, maka katakan dengan tegas bahwa hasil yang ditemukan **lebih banyak membahas sebab atau kewajibannya, bukan tata caranya secara runtut**. Jangan mengubah jawaban menjadi penjelasan umum yang seolah-olah menjawab "cara".
+6. JANGAN MENAMBAHKAN LANGKAH YANG TIDAK ADA: Untuk pertanyaan prosedural, jangan menulis urutan langkah kecuali langkah itu memang tampak jelas di dokumen yang diberikan."""
 
     user_prompt = f"""Pertanyaan Pengguna: "{request.query}"
 
