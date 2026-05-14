@@ -46,13 +46,15 @@ class HaditsResult(BaseModel):
     )
     arab: str = Field(description="Teks Arab hadits")
     terjemahan: str = Field(description="Terjemahan hadits dalam bahasa Indonesia")
-    
+
     # ATRIBUT BARU:
     preview: str = Field(
         description="Kutipan pendek bergaya Google dengan **highlight** pada query yang cocok (mendukung stemming)."
     )
-    
-    score: float = Field(description="Skor kemiripan semantik dari OpenSearch (0.0-1.0)")
+
+    score: float = Field(
+        description="Skor kemiripan semantik dari OpenSearch (0.0-1.0)"
+    )
 
 
 class HaditsResultForSummarizer(BaseModel):
@@ -83,3 +85,18 @@ class LLMSummarizerRequest(BaseModel):
         min_length=1,
         description="Daftar 1-3 hadits yang akan diringkas",
     )
+
+
+class ByRawiParams(BaseModel):
+    page: int = Field(default=1, ge=1, description="Nomor halaman (dimulai dari 1)")
+    page_size: int = Field(
+        default=10, ge=1, le=50, description="Jumlah hasil per halaman (1-50)"
+    )
+
+
+class ByRawiResponse(BaseModel):
+    rawi: str = Field(description="Nama perawi yang diminta")
+    total: int = Field(description="Total hadits dari perawi ini")
+    page: int = Field(description="Halaman saat ini")
+    page_size: int = Field(description="Jumlah hasil per halaman")
+    results: list[HaditsResult] = Field(description="Daftar hadits")

@@ -2,9 +2,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 from opensearchpy import OpenSearch
 
-from app.schemas.hadits_schema import SearchQuery, SearchResponse
+from app.schemas.hadits_schema import (
+    SearchQuery,
+    SearchResponse,
+    ByRawiParams,
+    ByRawiResponse,
+)
 from app.services.opensearch_client import get_opensearch_client
-from app.services.hadits_service import search_hadits, advanced_search_hadits
+from app.services.hadits_service import (
+    search_hadits,
+    advanced_search_hadits,
+    get_hadits_by_rawi,
+)
 
 router = APIRouter(prefix="/hadits", tags=["Hadits"])
 
@@ -14,7 +23,9 @@ def get_client() -> OpenSearch:
     return get_opensearch_client()
 
 
-@router.post("/search", response_model=SearchResponse, summary="Pencarian Semantik Hadits")
+@router.post(
+    "/search", response_model=SearchResponse, summary="Pencarian Semantik Hadits"
+)
 def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
     """
     Cari hadits menggunakan pencarian semantik (KNN embedding).
@@ -23,12 +34,20 @@ def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
     - **top_k**: jumlah hasil yang ingin dikembalikan (default: 10)
     """
     try:
-        return search_hadits(client=client, query=query.query, top_k=query.top_k, mode=query.mode)
+        return search_hadits(
+            client=client, query=query.query, top_k=query.top_k, mode=query.mode
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}"
+        )
 
 
-@router.post("/advanced-search", response_model=SearchResponse, summary="Pencarian Lanjutan Hadits")
+@router.post(
+    "/advanced-search",
+    response_model=SearchResponse,
+    summary="Pencarian Lanjutan Hadits",
+)
 def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
     """
     Cari hadits dengan filter tambahan di atas pencarian semantik.
@@ -46,4 +65,29 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
             mode=query.mode,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}"
+        )
+
+
+@router.get(
+    "/by-rawi/{rawi}",
+    response_model=ByRawiResponse,
+    summary="Ambil Hadits Berdasarkan Perawi",
+)
+def by_rawi(
+    rawi: str,
+    params: ByRawiParams = Depends(),
+    client: OpenSearch = Depends(get_client),
+):
+    try:
+        return get_hadits_by_rawi(
+            client=client,
+            rawi=rawi,
+            page=params.page,
+            page_size=params.page_size,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}"
+        )
