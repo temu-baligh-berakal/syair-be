@@ -1,3 +1,5 @@
+import re
+
 from sentence_transformers import SentenceTransformer
 from opensearchpy import OpenSearch
 
@@ -89,6 +91,78 @@ def _get_default_threshold(mode: str) -> float:
         "bm25": 5.0,
         "hybrid": 1.0
     }.get(mode, 0.0)
+
+
+def _clean_suggestion_fragment(fragment: str) -> str:
+    text = fragment.replace("**", " ")
+    text = re.sub(r"\s+", " ", text).strip(" .,;:-")
+    return text
+
+
+def _normalize_suggestion_words(text: str) -> list[str]:
+    words = []
+    for raw_word in text.split():
+        word = re.sub(r"(^[^\w]+|[^\w]+$)", "", raw_word, flags=re.UNICODE)
+        if word:
+            words.append(word)
+    return words
+
+
+def _find_query_start(words: list[str], query_terms: list[str]) -> int | None:
+    if not words or not query_terms:
+        return None
+
+    normalized_words = [word.lower() for word in words]
+    term_count = len(query_terms)
+
+    for start in range(0, len(normalized_words) - term_count + 1):
+        matches = True
+        for offset, term in enumerate(query_terms):
+            candidate = normalized_words[start + offset]
+            is_last_term = offset == term_count - 1
+            if is_last_term:
+                if not candidate.startswith(term):
+                    matches = False
+                    break
+            elif candidate != term:
+                matches = False
+                break
+        if matches:
+            return start
+
+    return None
+
+
+def _to_next_word_suggestion(text: str, query: str) -> str | None:
+    words = _normalize_suggestion_words(text)
+    query_terms = [term.lower() for term in _normalize_suggestion_words(query)]
+    if not words or not query_terms:
+        return None
+
+    start = _find_query_start(words, query_terms)
+    if start is None:
+        return None
+
+    suggestion_end = min(len(words), start + max(len(query_terms) + 3, 4))
+    suggestion_words = words[start:suggestion_end]
+    if not suggestion_words:
+        return None
+
+    return " ".join(suggestion_words).strip().lower()
+
+
+def _extract_suggestion_from_hit(hit: dict, query: str) -> str | None:
+    highlights = hit.get("highlight", {}).get("terjemahan", [])
+    if highlights:
+        suggestion = _to_next_word_suggestion(_clean_suggestion_fragment(highlights[0]), query)
+        if suggestion:
+            return suggestion
+
+    text = hit.get("_source", {}).get("terjemahan", "")
+    if not text:
+        return None
+
+    return _to_next_word_suggestion(_clean_suggestion_fragment(text), query)
 
 
 def search_hadits(
@@ -195,7 +269,7 @@ def advanced_search_hadits(
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
 
 
-def get_suggestions(client: OpenSearch, query: str) -> List[str]:
+def get_suggestions(client: OpenSearch, query: str) -> list[str]:
     """Mengambil saran autocomplete (rekomendasi pencarian) dari OpenSearch."""
     body = {
         "size": 5,
@@ -209,6 +283,23 @@ def get_suggestions(client: OpenSearch, query: str) -> List[str]:
                     "terjemahan.suggest._3gram"
                 ]
             }
+        },
+        "highlight": {
+            "pre_tags": ["**"],
+            "post_tags": ["**"],
+            "fields": {
+                "terjemahan": {
+                    "type": "unified",
+                    "number_of_fragments": 1,
+                    "fragment_size": 120,
+                    "matched_fields": [
+                        "terjemahan",
+                        "terjemahan.suggest",
+                        "terjemahan.suggest._2gram",
+                        "terjemahan.suggest._3gram",
+                    ],
+                }
+            },
         }
     }
     
@@ -219,16 +310,8 @@ def get_suggestions(client: OpenSearch, query: str) -> List[str]:
     seen = set()
     
     for hit in hits:
-        # Ambil cuplikan teks terjemahan yang pendek sebagai saran
-        text = hit["_source"].get("terjemahan", "")
-        # Bersihkan sanad singkat jika ada
-        from ingest import extract_clean_text
-        clean_text = extract_clean_text(text)
-        
-        # Ambil 5-7 kata pertama sebagai saran frasa
-        words = clean_text.split()
-        suggestion_phrase = " ".join(words[:6])
-        
+        suggestion_phrase = _extract_suggestion_from_hit(hit, query)
+
         if suggestion_phrase and suggestion_phrase not in seen:
             suggestions.append(suggestion_phrase)
             seen.add(suggestion_phrase)

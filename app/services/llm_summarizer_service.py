@@ -8,21 +8,28 @@ from app.schemas.hadits_schema import HaditsResultForSummarizer, LLMSummarizerRe
 
 load_dotenv()
 
-# Memuat GROQ_API_KEY_1 sampai GROQ_API_KEY_4
-_api_keys: List[str] = [
-    os.getenv(f"GROQ_API_KEY_{i}")
-    for i in range(1, 5)
-    if os.getenv(f"GROQ_API_KEY_{i}") is not None
-]
+class SummarizerError(Exception):
+    """Kesalahan terkontrol untuk service rangkuman."""
 
-if not _api_keys:
-    raise ValueError("Tidak ada satupun GROQ_API_KEY yang ditemukan di file .env")
+
+def _load_api_keys() -> List[str]:
+    return [
+        os.getenv(f"GROQ_API_KEY_{i}")
+        for i in range(1, 5)
+        if os.getenv(f"GROQ_API_KEY_{i}") is not None
+    ]
+
+
+_api_keys: List[str] = _load_api_keys()
 
 _api_key_index = 0
 _api_key_lock = threading.Lock()
 
 def get_next_api_key() -> str:
     global _api_key_index
+    if not _api_keys:
+        raise SummarizerError("GROQ API key belum dikonfigurasi di backend.")
+
     with _api_key_lock:
         key = _api_keys[_api_key_index]
         _api_key_index = (_api_key_index + 1) % len(_api_keys)
@@ -61,21 +68,27 @@ Konteks Dokumen Hadits yang Ditemukan:
 
 Buatlah ringkasan berdasarkan aturan yang telah ditetapkan."""
 
-    # Memanggil Groq API menggunakan model Llama 3
-    response = client.chat.completions.create(
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            }
-        ],
-        model="llama-3.3-70b-versatile",
-        temperature=0.2, 
-        max_tokens=1024,
-    )
+    try:
+        response = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.2,
+            max_tokens=1024,
+        )
+    except Exception as exc:
+        raise SummarizerError(f"Gagal menghubungi layanan LLM: {str(exc)}") from exc
 
-    return response.choices[0].message.content
+    content = response.choices[0].message.content if response.choices else None
+    if not content or not content.strip():
+        raise SummarizerError("Layanan LLM mengembalikan ringkasan kosong.")
+
+    return content

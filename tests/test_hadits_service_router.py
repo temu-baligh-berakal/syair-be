@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app as fastapi_app
 from app.routers.hadits_router import get_client
-from app.services.hadits_service import _parse_hit, search_hadits, advanced_search_hadits
+from app.services.hadits_service import _parse_hit, search_hadits, advanced_search_hadits, get_suggestions
 from app.services.strategies import get_strategy, get_available_modes
 
 
@@ -178,6 +178,91 @@ class TestSearchHaditsService:
         search_hadits(client=mock_client, query="niat", page_size=5, mode="bm25")
         body = mock_client.search.call_args.kwargs["body"]
         assert "multi_match" in body["query"]
+
+
+class TestAutocompleteSuggestion:
+
+    def test_get_suggestions_memakai_highlight_fragment(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {
+                "total": {"value": 1},
+                "hits": [
+                    {
+                        "_source": {
+                            "terjemahan": "Rumah tempat tinggal anak lelaki pamanku sangat luas.",
+                        },
+                        "highlight": {
+                            "terjemahan": [
+                                "Keutamaan menuntut **ilmu** dan mengamalkannya",
+                            ]
+                        },
+                    }
+                ],
+            }
+        }
+
+        suggestions = get_suggestions(mock_client, "ilmu")
+
+        assert suggestions == ["ilmu dan mengamalkannya"]
+
+    def test_get_suggestions_fallback_ke_snippet_match(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {
+                "total": {"value": 1},
+                "hits": [
+                    {
+                        "_source": {
+                            "terjemahan": "Orang yang memiliki keutamaan sabar akan memperoleh pahala besar.",
+                        },
+                    }
+                ],
+            }
+        }
+
+        suggestions = get_suggestions(mock_client, "keutamaan")
+
+        assert suggestions == ["keutamaan sabar akan memperoleh"]
+
+    def test_get_suggestions_menyelesaikan_kata_prefix(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {
+                "total": {"value": 1},
+                "hits": [
+                    {
+                        "_source": {
+                            "terjemahan": "Keutamaan menuntut ilmu dan mengamalkannya sangat besar.",
+                        },
+                    }
+                ],
+            }
+        }
+
+        suggestions = get_suggestions(mock_client, "keuta")
+
+        assert suggestions == ["keutamaan menuntut ilmu dan"]
+
+    def test_get_suggestions_buang_kandidat_yang_tidak_mengandung_seluruh_frasa(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {
+                "total": {"value": 2},
+                "hits": [
+                    {
+                        "_source": {
+                            "terjemahan": "Keutamaan bubur atas semua makanan.",
+                        },
+                    },
+                    {
+                        "_source": {
+                            "terjemahan": "Keutamaan Allah atas makhluknya.",
+                        },
+                    },
+                ],
+            }
+        }
+
+        suggestions = get_suggestions(mock_client, "keutamaan solat berjamaah")
+
+        assert suggestions == []
 
     def test_mode_hybrid(self, mock_model, mock_client):
         search_hadits(client=mock_client, query="niat", page_size=5, mode="hybrid")

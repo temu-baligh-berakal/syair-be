@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 from app.schemas.hadits_schema import LLMSummarizerRequest
-from app.services.llm_summarizer_service import summarize_hadits
+from app.services.llm_summarizer_service import SummarizerError, summarize_hadits
 
 router = APIRouter()
 
@@ -10,6 +10,11 @@ async def get_summary(request: LLMSummarizerRequest):
     try:
         summary = summarize_hadits(request)
         return summary
+    except SummarizerError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
