@@ -29,16 +29,16 @@ def get_next_api_key() -> str:
         return key
 
 def summarize_hadits(request: LLMSummarizerRequest) -> str:
-    top_3_hadits = request.hadits_results[:3]
+    top_10_hadits = request.hadits_results[:10]
 
     api_key = get_next_api_key()
     client = Groq(api_key=api_key)
 
-    # Format data konteks dengan rapi (Gunakan top_3_hadits, bukan request.hadits_results)
+    # Format data konteks dengan rapi (Gunakan top_10_hadits, bukan request.hadits_results)
     hadits_text = "\n\n".join(
         [
             f"[Dokumen {i+1}] - Perawi: {h.nama_perawi}\nTeks: {h.terjemahan}"
-            for i, h in enumerate(top_3_hadits)
+            for i, h in enumerate(top_10_hadits)
         ]
     )
 
