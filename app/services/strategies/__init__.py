@@ -18,7 +18,8 @@ class QueryStrategy(ABC):
         self,
         query_text: str,
         embedding: list[float],
-        top_k: int,
+        page: int,
+        page_size: int,
     ) -> dict:
         """Bangun OpenSearch query body."""
         ...
