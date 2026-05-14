@@ -70,6 +70,7 @@ class HaditsResultForSummarizer(BaseModel):
 class SearchResponse(BaseModel):
     query: str = Field(description="Query yang dikirim user")
     total: int = Field(description="Jumlah hasil yang ditemukan")
+    suggestion: Optional[str] = Field(default=None, description="Saran perbaikan kata (typo fix), misal 'shalat'")
     results: list[HaditsResult] = Field(description="Daftar hadits yang relevan")
 
 

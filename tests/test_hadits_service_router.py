@@ -99,6 +99,40 @@ class TestParseHit:
         assert result.nomor_hadits == 0
 
 
+class TestParseSuggestion:
+    def test_parse_suggestion_ada(self):
+        from app.services.hadits_service import _parse_suggestion
+        suggest_block = {
+            "spell_check": [
+                {"text": "shlat", "options": [{"text": "shalat"}]},
+                {"text": "brjamaah", "options": [{"text": "berjamaah"}]}
+            ]
+        }
+        res = _parse_suggestion(suggest_block)
+        assert res == "shalat berjamaah"
+
+    def test_parse_suggestion_sebagian_ada(self):
+        from app.services.hadits_service import _parse_suggestion
+        suggest_block = {
+            "spell_check": [
+                {"text": "shalat", "options": []},
+                {"text": "brjamaah", "options": [{"text": "berjamaah"}]}
+            ]
+        }
+        res = _parse_suggestion(suggest_block)
+        assert res == "shalat berjamaah"
+
+    def test_parse_suggestion_tidak_ada_typo(self):
+        from app.services.hadits_service import _parse_suggestion
+        suggest_block = {
+            "spell_check": [
+                {"text": "shalat", "options": []},
+            ]
+        }
+        res = _parse_suggestion(suggest_block)
+        assert res is None
+
+
 class TestSearchHaditsService:
 
     def test_memanggil_model_encode(self, mock_model, mock_client):
@@ -125,10 +159,14 @@ class TestSearchHaditsService:
         assert body["min_score"] == 0.75
 
     def test_return_search_response(self, mock_model, mock_client):
-        mock_client.search.return_value = {"hits": {"total": {"value": 1}, "hits": [FAKE_HIT]}}
-        resp = search_hadits(client=mock_client, query="niat", page_size=5)
-        assert resp.query == "niat"
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 1}, "hits": [FAKE_HIT]},
+            "suggest": {"spell_check": [{"text": "shlat", "options": [{"text": "shalat"}]}]}
+        }
+        resp = search_hadits(client=mock_client, query="shlat", page_size=5)
+        assert resp.query == "shlat"
         assert resp.total == 1
+        assert resp.suggestion == "shalat"
 
     def test_hasil_kosong(self, mock_model, mock_client):
         mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}

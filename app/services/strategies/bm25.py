@@ -17,6 +17,7 @@ class Bm25Strategy(QueryStrategy):
                     "query": query_text,
                     "fields": ["terjemahan^2", "arab"],
                     "type": "best_fields",
+                    "fuzziness": "AUTO",
                 }
             },
             "_source": SOURCE_FIELDS,

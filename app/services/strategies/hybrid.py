@@ -29,6 +29,7 @@ class HybridStrategy(QueryStrategy):
                                 "query": query_text,
                                 "fields": ["terjemahan^2", "arab"],
                                 "boost": 0.3,
+                                "fuzziness": "AUTO",
                             }
                         },
                     ]
