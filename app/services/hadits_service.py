@@ -58,11 +58,20 @@ def _resolve_effective_top_k(
     return min(requested_top_k, available_docs)
 
 
+def _get_default_threshold(mode: str) -> float:
+    return {
+        "knn": 0.5,
+        "bm25": 5.0,
+        "hybrid": 1.0
+    }.get(mode, 0.0)
+
+
 def search_hadits(
     client: OpenSearch,
     query: str,
     top_k: int = 10,
     mode: str = "knn",
+    threshold: float | None = None,
 ) -> SearchResponse:
     effective_top_k = _resolve_effective_top_k(client=client, requested_top_k=top_k)
 
@@ -72,6 +81,10 @@ def search_hadits(
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
     body = strategy.build_query(query_text=query, embedding=embedding, top_k=effective_top_k)
+
+    actual_threshold = threshold if threshold is not None else _get_default_threshold(mode)
+    if actual_threshold > 0.0:
+        body["min_score"] = actual_threshold
 
     response = client.search(index=INDEX_NAME, body=body)
     hits = response["hits"]["hits"]
@@ -86,6 +99,7 @@ def advanced_search_hadits(
     top_k: int = 10,
     nama_perawi: str | None = None,
     mode: str = "knn",
+    threshold: float | None = None,
 ) -> SearchResponse:
     effective_top_k = _resolve_effective_top_k(
         client=client,
@@ -99,6 +113,10 @@ def advanced_search_hadits(
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
     body = strategy.build_query(query_text=query, embedding=embedding, top_k=effective_top_k)
+
+    actual_threshold = threshold if threshold is not None else _get_default_threshold(mode)
+    if actual_threshold > 0.0:
+        body["min_score"] = actual_threshold
 
     if nama_perawi:
         body["query"] = {

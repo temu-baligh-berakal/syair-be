@@ -28,6 +28,10 @@ class SearchQuery(BaseModel):
         description="Mode pencarian — nilai yang tersedia diambil dari registry strategy",
         examples=["knn", "bm25", "hybrid"],
     )
+    threshold: Optional[float] = Field(
+        default=None,
+        description="Ambang batas (threshold) skor minimum. Jika None, menggunakan default berdasarkan mode.",
+    )
 
     @field_validator("mode")
     @classmethod
