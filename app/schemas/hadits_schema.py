@@ -93,3 +93,8 @@ class LLMSummarizerRequest(BaseModel):
         min_length=1,
         description="Daftar 1-10 hadits yang akan diringkas",
     )
+
+
+class SuggestionResponse(BaseModel):
+    query: str = Field(description="Query parsial yang dikirim user")
+    suggestions: List[str] = Field(description="Daftar saran pelengkapan kata")

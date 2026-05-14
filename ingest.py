@@ -81,11 +81,16 @@ def create_index(client, index_name):
                 "referensi_lengkap": {"type": "keyword"},
                 "arab": {"type": "text"},
                 
-                # --- PERUBAHAN UTAMA: CUSTOM ANALYZER DENGAN SINONIM ---
+                # --- PERUBAHAN UTAMA: CUSTOM ANALYZER DENGAN SINONIM & AUTOCOMPLETE ---
                 "terjemahan": {
                     "type": "text",
                     "analyzer": "indonesian_with_synonyms",
-                    "search_analyzer": "indonesian_with_synonyms"
+                    "search_analyzer": "indonesian_with_synonyms",
+                    "fields": {
+                        "suggest": {
+                            "type": "search_as_you_type"
+                        }
+                    }
                 },
                 # ----------------------------------------------------
                 
