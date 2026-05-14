@@ -2,10 +2,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from opensearchpy import OpenSearch
 
-from app.schemas.hadits_schema import SearchQuery, SearchResponse
+from app.schemas.hadits_schema import SearchQuery, SearchResponse, SuggestionResponse
 from app.services.opensearch_client import get_opensearch_client
-from app.services.hadits_service import search_hadits, advanced_search_hadits
-
+from app.services.hadits_service import search_hadits, advanced_search_hadits, get_suggestions
 router = APIRouter(prefix="/hadits", tags=["Hadits"])
 
 
@@ -58,3 +57,18 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
+
+
+@router.get("/suggest", response_model=SuggestionResponse, summary="Autocomplete / Rekomendasi Pencarian")
+def suggest(q: str, client: OpenSearch = Depends(get_client)):
+    """
+    Memberikan rekomendasi kata/frasa saat user mengetik (Google-like).
+    - **q**: query parsial dari user
+    """
+    if len(q) < 2:
+        return SuggestionResponse(query=q, suggestions=[])
+    try:
+        suggestions = get_suggestions(client, q)
+        return SuggestionResponse(query=q, suggestions=suggestions)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

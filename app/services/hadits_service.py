@@ -193,3 +193,44 @@ def advanced_search_hadits(
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
+
+
+def get_suggestions(client: OpenSearch, query: str) -> List[str]:
+    """Mengambil saran autocomplete (rekomendasi pencarian) dari OpenSearch."""
+    body = {
+        "size": 5,
+        "query": {
+            "multi_match": {
+                "query": query,
+                "type": "bool_prefix",
+                "fields": [
+                    "terjemahan.suggest",
+                    "terjemahan.suggest._2gram",
+                    "terjemahan.suggest._3gram"
+                ]
+            }
+        }
+    }
+    
+    response = client.search(index=INDEX_NAME, body=body)
+    hits = response["hits"]["hits"]
+    
+    suggestions = []
+    seen = set()
+    
+    for hit in hits:
+        # Ambil cuplikan teks terjemahan yang pendek sebagai saran
+        text = hit["_source"].get("terjemahan", "")
+        # Bersihkan sanad singkat jika ada
+        from ingest import extract_clean_text
+        clean_text = extract_clean_text(text)
+        
+        # Ambil 5-7 kata pertama sebagai saran frasa
+        words = clean_text.split()
+        suggestion_phrase = " ".join(words[:6])
+        
+        if suggestion_phrase and suggestion_phrase not in seen:
+            suggestions.append(suggestion_phrase)
+            seen.add(suggestion_phrase)
+            
+    return suggestions
