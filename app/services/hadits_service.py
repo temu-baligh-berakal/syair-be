@@ -13,6 +13,16 @@ import app.services.strategies.hybrid  # noqa: F401
 
 _model: SentenceTransformer | None = None
 
+_PROCEDURAL_QUERY_HINTS = {
+    "cara", "bagaimana", "langkah", "tata", "prosedur", "urutan",
+}
+
+_PROCEDURAL_DOC_HINTS = {
+    "cara", "langkah", "tata", "berwudhu", "wudhu", "mencuci", "membasuh",
+    "mengguyur", "menyiram", "menuangkan", "mengusap", "memulai", "kemudian",
+    "lalu", "setelah", "kepala", "rambut", "tangan", "kaki", "badan",
+}
+
 def get_model() -> SentenceTransformer:
     global _model
     if _model is None:
@@ -91,6 +101,43 @@ def _get_default_threshold(mode: str) -> float:
         "bm25": 5.0,
         "hybrid": 1.0
     }.get(mode, 0.0)
+
+
+def _normalize_query_terms(text: str) -> list[str]:
+    return [term.lower() for term in re.findall(r"\w+", text, flags=re.UNICODE)]
+
+
+def _is_procedural_query(query: str) -> bool:
+    terms = _normalize_query_terms(query)
+    return any(term in _PROCEDURAL_QUERY_HINTS for term in terms)
+
+
+def _procedural_topic_terms(query: str) -> list[str]:
+    stop_terms = _PROCEDURAL_QUERY_HINTS | {
+        "itu", "ini", "yang", "dan", "atau", "apa", "agar", "untuk",
+    }
+    return [term for term in _normalize_query_terms(query) if term not in stop_terms]
+
+
+def _rerank_for_procedural_query(query: str, results: list[HaditsResult]) -> list[HaditsResult]:
+    if not _is_procedural_query(query) or len(results) < 2:
+        return results
+
+    topic_terms = _procedural_topic_terms(query)
+
+    def ranking_key(result: HaditsResult) -> tuple[int, int, int, float]:
+        searchable_text = f"{result.preview} {result.terjemahan}".lower()
+        topic_matches = sum(1 for term in topic_terms if term in searchable_text)
+        doc_hints = sum(1 for hint in _PROCEDURAL_DOC_HINTS if hint in searchable_text)
+        has_sequence = int(any(token in searchable_text for token in ("kemudian", "lalu", "setelah")))
+        return (
+            int(topic_matches > 0 and doc_hints > 0),
+            has_sequence,
+            doc_hints,
+            result.score,
+        )
+
+    return sorted(results, key=ranking_key, reverse=True)
 
 
 def _clean_suggestion_fragment(fragment: str) -> str:
@@ -210,6 +257,7 @@ def search_hadits(
     suggestion = _parse_suggestion(response.get("suggest"))
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
+    results = _rerank_for_procedural_query(query, results)
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
 
 def advanced_search_hadits(
@@ -266,6 +314,7 @@ def advanced_search_hadits(
     suggestion = _parse_suggestion(response.get("suggest"))
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
+    results = _rerank_for_procedural_query(query, results)
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
 
 
