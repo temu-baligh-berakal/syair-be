@@ -179,6 +179,36 @@ class TestSearchHaditsService:
         body = mock_client.search.call_args.kwargs["body"]
         assert "multi_match" in body["query"]
 
+    def test_query_prosedural_mererank_hasil_bertata_cara(self, mock_model, mock_client):
+        procedural_hit = {
+            "_score": 1.2,
+            "_source": {
+                "nama_perawi": "Muslim",
+                "nomor_hadits": 248,
+                "referensi_lengkap": "Hadits Muslim Nomor 248",
+                "arab": "...",
+                "terjemahan": "Kemudian beliau berwudhu seperti wudhu untuk shalat, lalu mengguyur kepala dan seluruh badannya.",
+            },
+        }
+        non_procedural_hit = {
+            "_score": 4.8,
+            "_source": {
+                "nama_perawi": "Bukhari",
+                "nomor_hadits": 127,
+                "referensi_lengkap": "Hadits Bukhari Nomor 127",
+                "arab": "...",
+                "terjemahan": "Apabila perempuan melihat air maka dia wajib mandi.",
+            },
+        }
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 2}, "hits": [non_procedural_hit, procedural_hit]},
+        }
+
+        resp = search_hadits(client=mock_client, query="bagaimana cara mandi wajib", page_size=5)
+
+        assert resp.results[0].nama_perawi == "Muslim"
+        assert "berwudhu" in resp.results[0].terjemahan.lower()
+
 
 class TestAutocompleteSuggestion:
 
