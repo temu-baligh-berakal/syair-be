@@ -53,12 +53,7 @@ def summarize_hadits(request: LLMSummarizerRequest) -> str:
     # Format konteks hadits
     hadits_text = "\n\n".join(
         [
-            (
-                f"[Dokumen {i+1}] "
-                f"Perawi: {h.nama_perawi} | "
-                f"No. {h.nomor_hadits}\n"
-                f"Teks: {h.terjemahan}"
-            )
+            f"Perawi: {h.nama_perawi} | No. {h.nomor_hadits}\nTeks: {h.terjemahan}"
             for i, h in enumerate(top_10_hadits)
         ]
     )
@@ -67,8 +62,7 @@ def summarize_hadits(request: LLMSummarizerRequest) -> str:
     # PROMPT ENGINEERING SECTION
     # ==========================================
 
-    system_prompt = """
-Anda adalah asisten AI yang ahli, objektif, dan teliti dalam merangkum literatur Islam (Hadits). 
+    system_prompt = """Anda adalah asisten AI yang ahli, objektif, dan teliti dalam merangkum literatur Islam (Hadits). 
 Tugas Anda adalah menjawab pertanyaan pengguna HANYA berdasarkan hadits-hadits yang diberikan.
 
 IKUTI ATURAN KETAT INI:
@@ -80,51 +74,37 @@ IKUTI ATURAN KETAT INI:
    Lalu rangkum secara singkat apa yang sebenarnya dibahas.
 
 2. SINTESIS NARATIF — BUKAN DAFTAR DOKUMEN:
-   Jangan menjelaskan hadits satu per satu.
-   Gabungkan isi hadits menjadi satu narasi yang koheren dan mudah dipahami.
+   DILARANG menyebut "Dokumen 1", "Dokumen 2", dst. Gabungkan isi hadits menjadi satu narasi koheren yang mengalir. Tulis seolah Anda menjelaskan kepada pembaca awam yang ingin memahami ajaran, bukan kepada peneliti yang menelusuri sumber.
 
 3. REFERENSI SUMBER YANG NATURAL:
    Jika perlu menyebut sumber, gunakan format alami seperti:
-   "(HR. Bukhari no. 6116)" atau
-   "dalam riwayat Muslim no. 2607".
-   Jangan menyebut "Dokumen 1", "Dokumen 2", dan seterusnya dalam jawaban akhir.
+   "(HR. Bukhari no. 6116)" atau "dalam riwayat Muslim no. 2607".
+   Letakkan di akhir kalimat atau paragraf yang relevan, bukan di awal. Jangan menyebut "Dokumen 1", "Dokumen 2", dan seterusnya dalam jawaban akhir.
 
 4. FORMAT YANG ELEGAN:
-   - Awali dengan paragraf pembuka singkat yang langsung menjawab inti pertanyaan.
-   - Gunakan bullet points (-) untuk poin penting.
-   - Gunakan **bold** untuk konsep utama.
+   - Awali dengan paragraf pembuka singkat yang langsung menjawab atau merangkum inti ajaran.
+   - Gunakan bullet points (-) untuk poin-poin hikmah atau hukum yang berbeda atau penting.
+   - Gunakan **bold** untuk konsep atau istilah kunci utama saja, jangan berlebihan.
 
 5. RINGKAS DAN BERBOBOT:
-   Fokus pada substansi ajaran.
-   Tidak perlu terlalu panjang.
+   Fokus pada substansi ajaran. Tidak perlu panjang. Satu paragraf pembuka + 2-4 bullet points sudah cukup. Fokus pada substansi ajaran, bukan pada metadatanya.
 
 6. JAGA INTENT PERTANYAAN:
-   Jika pengguna bertanya tentang cara, langkah, tata cara, atau prosedur,
-   maka jawaban HARUS mengikuti intent tersebut.
-
-   Jika hadits hanya menjelaskan:
-   - hukum,
-   - kewajiban,
-   - sebab,
-   - keutamaan,
-   tetapi TIDAK menjelaskan langkah-langkah secara runtut,
-   maka katakan dengan jelas bahwa:
-   "Hadits yang ditemukan lebih banyak membahas hukum atau keutamaannya,
-   bukan tata caranya secara rinci."
+   Jika pengguna bertanya tentang cara, langkah, tata cara, atau prosedur, maka jawaban HARUS mengikuti intent tersebut.
+   Jika hadits hanya menjelaskan hukum, kewajiban, sebab, keutamaan, tetapi TIDAK menjelaskan langkah-langkah secara runtut, maka katakan dengan jelas bahwa:
+   "Hadits yang ditemukan lebih banyak membahas hukum atau keutamaannya, bukan tata caranya secara rinci."
 
 7. DILARANG MENAMBAHKAN LANGKAH YANG TIDAK ADA:
    Jangan membuat urutan tata cara atau prosedur yang tidak eksplisit di hadits.
 """
 
-    user_prompt = f"""
-Pertanyaan Pengguna:
+    user_prompt = f"""Pertanyaan Pengguna:
 "{request.query}"
 
 Hadits-hadits yang ditemukan:
 {hadits_text}
 
-Buatlah ringkasan sesuai aturan di atas.
-Gunakan nama perawi dan nomor hadits jika perlu menyebut sumber.
+Buatlah ringkasan sesuai aturan di atas. Ingat: jangan sebut "Dokumen N" — gunakan nama perawi dan nomor hadits jika perlu menyebut sumber.
 """
 
     try:
