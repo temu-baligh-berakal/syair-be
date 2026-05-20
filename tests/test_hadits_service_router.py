@@ -36,6 +36,15 @@ def mock_model():
         yield model
 
 
+@pytest.fixture(autouse=True)
+def mock_cross_encoder():
+    with patch("app.services.hadits_service.get_cross_encoder") as m:
+        ce_model = MagicMock()
+        ce_model.predict.side_effect = lambda pairs: [1.0] * len(pairs)
+        m.return_value = ce_model
+        yield ce_model
+
+
 @pytest.fixture
 def mock_client():
     client = MagicMock()
@@ -131,16 +140,17 @@ class TestParseSuggestion:
 
 class TestSearchHaditsService:
 
-    def test_memanggil_model_encode(self, mock_model, mock_client):
+    def test_memanggil_model_encode(self, mock_model, mock_cross_encoder, mock_client):
         search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
         mock_model.encode.assert_called_once_with("niat ibadah")
 
-    def test_memanggil_opensearch_search(self, mock_model, mock_client):
+    def test_memanggil_opensearch_search(self, mock_model, mock_cross_encoder, mock_client):
         search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
         mock_client.search.assert_called_once()
 
     def test_pagination_parameter_from_and_size(self, mock_model, mock_client):
-        search_hadits(client=mock_client, query="niat ibadah", page=3, page_size=10)
+        # Gunakan use_reranker=False agar backend mem-passing 'from' langsung ke OpenSearch query (Tanpa fetch_size 30 statis)
+        search_hadits(client=mock_client, query="niat ibadah", page=3, page_size=10, use_reranker=False)
         body = mock_client.search.call_args.kwargs["body"]
         assert body["from"] == 20
         assert body["size"] == 10
