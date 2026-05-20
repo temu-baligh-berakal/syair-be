@@ -232,12 +232,9 @@ def search_hadits(
     threshold: float | None = None,
     use_reranker: bool = True,
 ) -> SearchResponse:
-    if use_reranker:
-        fetch_page = 1
-        fetch_size = 30  # Ambil Top 30 untuk di-rerank agar memori CPU tidak membengkak
-    else:
-        fetch_page = page
-        fetch_size = page_size
+    # Selalu ambil sesuai page dan size untuk membatasi jumlah reranking ke 10 saja (atau sesuai page_size) agar efisien
+    fetch_page = page
+    fetch_size = page_size
     
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
@@ -300,13 +297,8 @@ def search_hadits(
 
     results = _rerank_for_procedural_query(query, results)
     
-    # --- MANUAL PAGINATION ---
-    if use_reranker:
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        paginated_results = results[start_idx:end_idx]
-    else:
-        paginated_results = results
+    # Karena kita sudah mengambil data sesuai pagination OpenSearch, tidak perlu lagi manual pagination
+    paginated_results = results
 
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
@@ -320,12 +312,8 @@ def advanced_search_hadits(
     threshold: float | None = None,
     use_reranker: bool = True,
 ) -> SearchResponse:
-    if use_reranker:
-        fetch_page = 1
-        fetch_size = 30  # Ambil Top 30 untuk di-rerank
-    else:
-        fetch_page = page
-        fetch_size = page_size
+    fetch_page = page
+    fetch_size = page_size
     
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
@@ -394,13 +382,7 @@ def advanced_search_hadits(
         
     results = _rerank_for_procedural_query(query, results)
     
-    # --- MANUAL PAGINATION ---
-    if use_reranker:
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        paginated_results = results[start_idx:end_idx]
-    else:
-        paginated_results = results
+    paginated_results = results
 
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
