@@ -29,7 +29,8 @@ def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
             page=query.page,
             page_size=query.page_size,
             mode=query.mode,
-            threshold=query.threshold
+            threshold=query.threshold,
+            use_reranker=query.use_reranker
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
@@ -54,6 +55,7 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
             nama_perawi=query.nama_perawi,
             mode=query.mode,
             threshold=query.threshold,
+            use_reranker=query.use_reranker
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")

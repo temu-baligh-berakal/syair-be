@@ -37,6 +37,10 @@ class SearchQuery(BaseModel):
         default=None,
         description="Ambang batas (threshold) skor minimum. Jika None, menggunakan default berdasarkan mode.",
     )
+    use_reranker: bool = Field(
+        default=True,
+        description="Apakah menggunakan model Cross-Encoder untuk mererank hasil pencarian. Default True.",
+    )
 
     @field_validator("mode")
     @classmethod

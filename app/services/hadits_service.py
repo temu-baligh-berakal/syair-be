@@ -1,6 +1,7 @@
 import re
+import logging
 
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from opensearchpy import OpenSearch
 
 from app.config import INDEX_NAME
@@ -11,7 +12,10 @@ import app.services.strategies.knn     # noqa: F401
 import app.services.strategies.bm25    # noqa: F401
 import app.services.strategies.hybrid  # noqa: F401
 
+logger = logging.getLogger(__name__)
+
 _model: SentenceTransformer | None = None
+_cross_encoder: CrossEncoder | None = None
 
 _PROCEDURAL_QUERY_HINTS = {
     "cara", "bagaimana", "langkah", "tata", "prosedur", "urutan",
@@ -28,6 +32,13 @@ def get_model() -> SentenceTransformer:
     if _model is None:
         _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _model
+
+def get_cross_encoder() -> CrossEncoder:
+    global _cross_encoder
+    if _cross_encoder is None:
+        # Menggunakan model multilingual miniLM yang cukup ringan untuk CPU backend (EC2 spec kecil)
+        _cross_encoder = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+    return _cross_encoder
 
 def _parse_hit(hit: dict, score: float) -> HaditsResult:
     """Konversi satu hit OpenSearch menjadi HaditsResult dan ekstrak Highlight."""
@@ -219,10 +230,18 @@ def search_hadits(
     page_size: int = 10,
     mode: str = "knn",
     threshold: float | None = None,
+    use_reranker: bool = True,
 ) -> SearchResponse:
+    if use_reranker:
+        fetch_page = 1
+        fetch_size = 30  # Ambil Top 30 untuk di-rerank agar memori CPU tidak membengkak
+    else:
+        fetch_page = page
+        fetch_size = page_size
+    
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
-    body = strategy.build_query(query_text=query, embedding=embedding, page=page, page_size=page_size)
+    body = strategy.build_query(query_text=query, embedding=embedding, page=fetch_page, page_size=fetch_size)
 
     body["suggest"] = {
         "text": query,
@@ -257,8 +276,39 @@ def search_hadits(
     suggestion = _parse_suggestion(response.get("suggest"))
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
+    
+    # --- RERANKING DENGAN CROSS-ENCODER ---
+    if use_reranker and results:
+        logger.info(f"=== Top 10 BEFORE Reranking (search: '{query}') ===")
+        for i, r in enumerate(results[:10]):
+            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
+
+        ce_model = get_cross_encoder()
+        pairs = [[query, res.terjemahan] for res in results]
+        
+        # Hitung skor menggunakan cross-encoder
+        ce_scores = ce_model.predict(pairs)
+        for res, score in zip(results, ce_scores):
+            res.score = float(score)
+            
+        # Urutkan berdasarkan skor Cross-Encoder yang baru
+        results = sorted(results, key=lambda x: x.score, reverse=True)
+
+        logger.info(f"=== Top 10 AFTER Reranking (search: '{query}') ===")
+        for i, r in enumerate(results[:10]):
+            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
+
     results = _rerank_for_procedural_query(query, results)
-    return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
+    
+    # --- MANUAL PAGINATION ---
+    if use_reranker:
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_results = results[start_idx:end_idx]
+    else:
+        paginated_results = results
+
+    return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
 def advanced_search_hadits(
     client: OpenSearch,
@@ -268,10 +318,18 @@ def advanced_search_hadits(
     nama_perawi: str | None = None,
     mode: str = "knn",
     threshold: float | None = None,
+    use_reranker: bool = True,
 ) -> SearchResponse:
+    if use_reranker:
+        fetch_page = 1
+        fetch_size = 30  # Ambil Top 30 untuk di-rerank
+    else:
+        fetch_page = page
+        fetch_size = page_size
+    
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
-    body = strategy.build_query(query_text=query, embedding=embedding, page=page, page_size=page_size)
+    body = strategy.build_query(query_text=query, embedding=embedding, page=fetch_page, page_size=fetch_size)
 
     body["suggest"] = {
         "text": query,
@@ -314,8 +372,37 @@ def advanced_search_hadits(
     suggestion = _parse_suggestion(response.get("suggest"))
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
+    
+    # --- RERANKING DENGAN CROSS-ENCODER ---
+    if use_reranker and results:
+        logger.info(f"=== Top 10 BEFORE Reranking (advanced search: '{query}') ===")
+        for i, r in enumerate(results[:10]):
+            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
+
+        ce_model = get_cross_encoder()
+        pairs = [[query, res.terjemahan] for res in results]
+        
+        ce_scores = ce_model.predict(pairs)
+        for res, score in zip(results, ce_scores):
+            res.score = float(score)
+            
+        results = sorted(results, key=lambda x: x.score, reverse=True)
+
+        logger.info(f"=== Top 10 AFTER Reranking (advanced search: '{query}') ===")
+        for i, r in enumerate(results[:10]):
+            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
+        
     results = _rerank_for_procedural_query(query, results)
-    return SearchResponse(query=query, total=total, suggestion=suggestion, results=results)
+    
+    # --- MANUAL PAGINATION ---
+    if use_reranker:
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_results = results[start_idx:end_idx]
+    else:
+        paginated_results = results
+
+    return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
 
 def get_suggestions(client: OpenSearch, query: str) -> list[str]:
