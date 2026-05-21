@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 opensearch-py
-sentence-transformers[onnx]
+sentence-transformers
 pandas
 tqdm
 python-dotenv
