@@ -174,6 +174,81 @@ class TestSearchHaditsService:
         assert resp.total == 1
         assert resp.suggestion == "shalat"
 
+    def test_reranker_membuang_hasil_skor_rendah_tanpa_overlap_query(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        low_confidence_hit = {
+            "_score": 0.9,
+            "_source": {
+                "nama_perawi": "Tirmidzi",
+                "nomor_hadits": 3225,
+                "referensi_lengkap": "Hadits Tirmidzi Nomor 3225",
+                "arab": "...",
+                "terjemahan": "Telah menceritakan kepada kami Affan bin Muslim.",
+            },
+        }
+        mock_client.search.return_value = make_opensearch_response([low_confidence_hit])
+        mock_cross_encoder.predict.side_effect = None
+        mock_cross_encoder.predict.return_value = [-3.0]
+
+        resp = search_hadits(client=mock_client, query="alfan farizki", page_size=5)
+
+        assert resp.total == 0
+        assert resp.results == []
+
+    def test_reranker_mempertahankan_skor_rendah_jika_ada_overlap_query(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        low_score_but_matching_hit = {
+            "_score": 0.9,
+            "_source": {
+                "nama_perawi": "Muslim",
+                "nomor_hadits": 1,
+                "referensi_lengkap": "Hadits Muslim Nomor 1",
+                "arab": "...",
+                "terjemahan": "Larangan zina dan dosa besar yang berkaitan dengannya.",
+            },
+        }
+        mock_client.search.return_value = make_opensearch_response([low_score_but_matching_hit])
+        mock_cross_encoder.predict.side_effect = None
+        mock_cross_encoder.predict.return_value = [-3.0]
+
+        resp = search_hadits(client=mock_client, query="larangan zina", page_size=5)
+
+        assert resp.total == 1
+        assert len(resp.results) == 1
+
+    def test_reranker_mempertahankan_hasil_tanpa_overlap_jika_skor_cukup_tinggi(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        semantic_hit = {
+            "_score": 0.9,
+            "_source": {
+                "nama_perawi": "Bukhari",
+                "nomor_hadits": 2,
+                "referensi_lengkap": "Hadits Bukhari Nomor 2",
+                "arab": "...",
+                "terjemahan": "Setiap amalan tergantung kepada niatnya.",
+            },
+        }
+        mock_client.search.return_value = make_opensearch_response([semantic_hit])
+        mock_cross_encoder.predict.side_effect = None
+        mock_cross_encoder.predict.return_value = [-0.5]
+
+        resp = search_hadits(client=mock_client, query="motivasi ibadah", page_size=5)
+
+        assert resp.total == 1
+        assert len(resp.results) == 1
+
     def test_hasil_kosong(self, mock_model, mock_client):
         mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
         resp = search_hadits(client=mock_client, query="tidak ada", page_size=5)
