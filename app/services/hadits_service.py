@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 _model: SentenceTransformer | None = None
 _cross_encoder: CrossEncoder | None = None
+RERANKER_MODEL_NAME = "temsa/mmarco-mMiniLMv2-L12-H384-v1-onnx-cpu-qint8"
+RERANKER_BACKEND = "onnx"
+RERANKER_MODEL_KWARGS = {"file_name": "model.onnx", "export": False}
 
 _PROCEDURAL_QUERY_HINTS = {
     "cara", "bagaimana", "langkah", "tata", "prosedur", "urutan",
@@ -36,8 +39,11 @@ def get_model() -> SentenceTransformer:
 def get_cross_encoder() -> CrossEncoder:
     global _cross_encoder
     if _cross_encoder is None:
-        # Menggunakan model multilingual miniLM yang cukup ringan untuk CPU backend (EC2 spec kecil)
-        _cross_encoder = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+        _cross_encoder = CrossEncoder(
+            RERANKER_MODEL_NAME,
+            backend=RERANKER_BACKEND,
+            model_kwargs=RERANKER_MODEL_KWARGS,
+        )
     return _cross_encoder
 
 def _parse_hit(hit: dict, score: float) -> HaditsResult:
