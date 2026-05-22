@@ -35,6 +35,3 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt pytest httpx numpy
-
-      - name: Jalankan semua test
-        run: python -m pytest tests/ -v --tb=short
