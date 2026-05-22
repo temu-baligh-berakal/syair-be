@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 _model: SentenceTransformer | None = None
 _cross_encoder: CrossEncoder | None = None
+RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L2-v2"
+LOW_CONFIDENCE_RERANKER_SCORE = -1.5
+
+_SEARCH_STOP_TERMS = {
+    "ada", "agar", "akan", "apa", "atau", "bagaimana", "bagi", "cara",
+    "dalam", "dan", "dari", "dengan", "di", "ini", "itu", "ke", "lebih",
+    "mengenai", "pada", "tentang", "untuk", "yang",
+}
 
 _PROCEDURAL_QUERY_HINTS = {
     "cara", "bagaimana", "langkah", "tata", "prosedur", "urutan",
@@ -38,8 +46,7 @@ def get_model() -> SentenceTransformer:
 def get_cross_encoder() -> CrossEncoder:
     global _cross_encoder
     if _cross_encoder is None:
-        # Menggunakan model multilingual miniLM yang cukup ringan untuk CPU backend (EC2 spec kecil)
-        _cross_encoder = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+        _cross_encoder = CrossEncoder(RERANKER_MODEL_NAME)
     return _cross_encoder
 
 def _parse_hit(hit: dict, score: float) -> HaditsResult:
@@ -119,6 +126,39 @@ def _get_default_threshold(mode: str) -> float:
 
 def _normalize_query_terms(text: str) -> list[str]:
     return [term.lower() for term in re.findall(r"\w+", text, flags=re.UNICODE)]
+
+
+def _content_query_terms(query: str) -> list[str]:
+    return [
+        term
+        for term in _normalize_query_terms(query)
+        if len(term) >= 3 and term not in _SEARCH_STOP_TERMS
+    ]
+
+
+def _has_query_term_overlap(query: str, result: HaditsResult) -> bool:
+    query_terms = _content_query_terms(query)
+    if not query_terms:
+        return False
+
+    searchable_terms = set(
+        _normalize_query_terms(
+            f"{result.referensi_lengkap} {result.preview} {result.terjemahan}"
+        )
+    )
+    return any(term in searchable_terms for term in query_terms)
+
+
+def _filter_low_confidence_reranked_results(
+    query: str,
+    results: list[HaditsResult],
+) -> list[HaditsResult]:
+    return [
+        result
+        for result in results
+        if result.score >= LOW_CONFIDENCE_RERANKER_SCORE
+        or _has_query_term_overlap(query, result)
+    ]
 
 
 def _is_procedural_query(query: str) -> bool:
@@ -337,6 +377,10 @@ def search_hadits(
         for i, r in enumerate(results[:10]):
             logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
 
+        results = _filter_low_confidence_reranked_results(query, results)
+        if page == 1 and not results:
+            total = 0
+
     results = _rerank_for_procedural_query(query, results)
     
     # Karena kita sudah mengambil data sesuai pagination OpenSearch, tidak perlu lagi manual pagination
@@ -421,6 +465,10 @@ def advanced_search_hadits(
         logger.info(f"=== Top 10 AFTER Reranking (advanced search: '{query}') ===")
         for i, r in enumerate(results[:10]):
             logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
+
+        results = _filter_low_confidence_reranked_results(query, results)
+        if page == 1 and not results:
+            total = 0
         
     results = _rerank_for_procedural_query(query, results)
     

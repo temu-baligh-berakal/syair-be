@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download ML models agar termuat ke dalam Docker Image
 # Ini mencegah server men-download ratusan MB saat pertama kali container jalan
-RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2'); CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')"
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L2-v2')"
 
 # Copy source code
 COPY . .
