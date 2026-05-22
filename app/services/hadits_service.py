@@ -1,5 +1,7 @@
 import re
 import logging
+import os
+import psycopg2
 
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from opensearchpy import OpenSearch
@@ -69,6 +71,7 @@ def _parse_hit(hit: dict, score: float) -> HaditsResult:
             preview += "..."
 
     return HaditsResult(
+        id=hit["_id"],
         nama_perawi=src.get("nama_perawi", ""),
         nomor_hadits=src.get("nomor_hadits", 0),
         referensi_lengkap=src.get("referensi_lengkap", ""),
@@ -221,6 +224,45 @@ def _extract_suggestion_from_hit(hit: dict, query: str) -> str | None:
         return None
 
     return _to_next_word_suggestion(_clean_suggestion_fragment(text), query)
+
+
+def get_hadits_by_id(client: OpenSearch, hadits_id: str) -> HaditsResult:
+    """Ambil satu hadits berdasarkan ID OpenSearch."""
+    hit = client.get(index=INDEX_NAME, id=hadits_id)
+    return _parse_hit(hit, 1.0)
+
+
+def get_related_hadits(client: OpenSearch, hadits_id: str) -> list[HaditsResult]:
+    """Ambil daftar hadits yang mirip dari Neon DB (precomputed)."""
+    try:
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            logger.error("DATABASE_URL tidak ditemukan")
+            return []
+            
+        conn = psycopg2.connect(db_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT target_id, score FROM hadits_similarity WHERE source_id = %s ORDER BY score DESC LIMIT 10", 
+                (hadits_id,)
+            )
+            rows = cur.fetchall()
+            conn.close()
+            
+        if not rows:
+            return []
+        
+        # Batch fetch content dari OpenSearch
+        target_ids = [r[0] for r in rows]
+        scores = {r[0]: r[1] for r in rows}
+        
+        res = client.mget(index=INDEX_NAME, body={"ids": target_ids})
+        
+        return [_parse_hit(hit, scores[hit["_id"]]) for hit in res["docs"] if hit.get("found")]
+    except Exception as e:
+        logger.error(f"Gagal mengambil related hadits: {str(e)}")
+        return []
+
 
 
 def search_hadits(

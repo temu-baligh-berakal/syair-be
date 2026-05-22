@@ -6,3 +6,4 @@ pandas
 tqdm
 python-dotenv
 groq
+psycopg2-binary

@@ -52,6 +52,7 @@ class SearchQuery(BaseModel):
 
 
 class HaditsResult(BaseModel):
+    id: str = Field(description="ID unik hadits (OpenSearch Document ID)")
     nama_perawi: str = Field(description="Nama perawi hadits, misal: 'Bukhari'")
     nomor_hadits: int = Field(description="Nomor hadits dalam kitab")
     referensi_lengkap: str = Field(
@@ -66,6 +67,11 @@ class HaditsResult(BaseModel):
     )
     
     score: float = Field(description="Skor kemiripan semantik dari OpenSearch (0.0-1.0)")
+
+
+class HaditsDetailResponse(BaseModel):
+    hadits: HaditsResult
+    related_hadits: List[HaditsResult] = Field(default_factory=list, description="Daftar 10 hadits serupa")
 
 
 class HaditsResultForSummarizer(BaseModel):
