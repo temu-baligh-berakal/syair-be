@@ -13,13 +13,13 @@ class Bm25Strategy(QueryStrategy):
             "from": from_index,
             "size": page_size,
             "query": {
-                "multi_match": {
+                "query_string": {
                     "query": query_text,
                     "fields": ["terjemahan^2", "arab"],
-                    "type": "best_fields",
+                    "default_operator": "AND",
+                    "analyze_wildcard": True,
+                    "allow_leading_wildcard": False,
                     "fuzziness": "AUTO",
-                    "operator": "and",
-                    "minimum_should_match": "75%",
                 }
             },
             "_source": SOURCE_FIELDS,

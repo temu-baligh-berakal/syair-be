@@ -25,13 +25,14 @@ class HybridStrategy(QueryStrategy):
                             }
                         },
                         {
-                            "multi_match": {
+                            "query_string": {
                                 "query": query_text,
                                 "fields": ["terjemahan^2", "arab"],
                                 "boost": 0.3,
+                                "default_operator": "AND",
+                                "analyze_wildcard": True,
+                                "allow_leading_wildcard": False,
                                 "fuzziness": "AUTO",
-                                "operator": "and",
-                                "minimum_should_match": "75%",
                             }
                         },
                     ]
