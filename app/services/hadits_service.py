@@ -1,13 +1,24 @@
+import json
 import re
 import logging
 import os
 import psycopg2
+import urllib.error
+import urllib.request
+import time
+from typing import Any
 
-from sentence_transformers import SentenceTransformer, CrossEncoder
 from opensearchpy import OpenSearch
 
 from app.config import INDEX_NAME
 from app.schemas.hadits_schema import HaditsResult, SearchResponse
+from app.services.feedback_service import get_irrelevant_feedback_ids
+from app.services.search_cache_service import (
+    build_search_cache_key,
+    get_cached_search_response,
+    record_search_query_and_get_popularity,
+    set_cached_search_response,
+)
 from app.services.strategies import get_strategy
 
 import app.services.strategies.knn     # noqa: F401
@@ -16,10 +27,24 @@ import app.services.strategies.hybrid  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-_model: SentenceTransformer | None = None
-_cross_encoder: CrossEncoder | None = None
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L2-v2"
-LOW_CONFIDENCE_RERANKER_SCORE = -1.5
+_model: Any | None = None
+_cross_encoder: Any | None = None
+LOCAL_RERANKER_MODEL_NAME = os.getenv(
+    "LOCAL_RERANKER_MODEL_NAME",
+    "cross-encoder/ms-marco-MiniLM-L2-v2",
+)
+JINA_RERANKER_API_URL = os.getenv("JINA_RERANKER_API_URL", "https://api.jina.ai/v1/rerank")
+JINA_RERANKER_MODEL = os.getenv("JINA_RERANKER_MODEL", "jina-reranker-v3")
+JINA_RERANKER_TIMEOUT_SECONDS = float(os.getenv("JINA_RERANKER_TIMEOUT_SECONDS", "10"))
+JINA_RERANKER_USER_AGENT = os.getenv("JINA_RERANKER_USER_AGENT", "SyairBackend/0.1")
+EXTERNAL_RERANKER_RATE_LIMIT_COOLDOWN_SECONDS = float(
+    os.getenv("EXTERNAL_RERANKER_RATE_LIMIT_COOLDOWN_SECONDS", "60")
+)
+LOW_CONFIDENCE_RERANKER_SCORE = float(os.getenv("LOW_CONFIDENCE_RERANKER_SCORE", "-1.5"))
+RERANKER_CANDIDATE_SIZE = int(os.getenv("RERANKER_CANDIDATE_SIZE", "100"))
+RERANKER_MAX_CANDIDATES = int(os.getenv("RERANKER_MAX_CANDIDATES", "100"))
+RELATED_HADITS_LIMIT = 10
+_external_reranker_cooldown_until: dict[str, float] = {}
 
 _SEARCH_STOP_TERMS = {
     "ada", "agar", "akan", "apa", "atau", "bagaimana", "bagi", "cara",
@@ -37,21 +62,81 @@ _PROCEDURAL_DOC_HINTS = {
     "lalu", "setelah", "kepala", "rambut", "tangan", "kaki", "badan",
 }
 
-def get_model() -> SentenceTransformer:
+def get_model() -> Any:
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
+
         _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     return _model
 
-def get_cross_encoder() -> CrossEncoder:
+def get_cross_encoder() -> Any:
     global _cross_encoder
     if _cross_encoder is None:
-        _cross_encoder = CrossEncoder(RERANKER_MODEL_NAME)
+        from sentence_transformers import CrossEncoder
+
+        _cross_encoder = CrossEncoder(LOCAL_RERANKER_MODEL_NAME)
     return _cross_encoder
+
+
+def _get_jina_api_key() -> str | None:
+    return os.getenv("JINA_API_KEY") or os.getenv("JINA_AUTH_TOKEN")
+
+
+def _get_reranker_provider(reranker_provider: str | None = None) -> str:
+    provider = (reranker_provider or os.getenv("RERANKER_PROVIDER", "jina")).strip().lower()
+    if provider == "voyage":
+        logger.warning("Reranker provider 'voyage' sudah deprecated; memakai jina.")
+        return "jina"
+    if provider not in {"jina", "local"}:
+        logger.warning(f"Reranker provider '{provider}' tidak dikenal; fallback ke local.")
+        return "local"
+    return provider
+
+
+def _should_use_jina_reranker(reranker_provider: str | None = None) -> bool:
+    return _get_reranker_provider(reranker_provider) == "jina" and bool(_get_jina_api_key())
+
+
+def _get_reranker_cache_id(reranker_provider: str | None = None) -> str:
+    provider = _get_reranker_provider(reranker_provider)
+    if provider == "jina" and _get_jina_api_key():
+        return f"jina:{os.getenv('JINA_RERANKER_MODEL', JINA_RERANKER_MODEL)}"
+    return f"local:{LOCAL_RERANKER_MODEL_NAME}"
+
+
+def _external_reranker_cooldown_remaining(provider: str) -> float:
+    return max(0.0, _external_reranker_cooldown_until.get(provider, 0.0) - time.time())
+
+
+def _mark_external_reranker_rate_limited(provider: str) -> None:
+    cooldown_seconds = max(0.0, EXTERNAL_RERANKER_RATE_LIMIT_COOLDOWN_SECONDS)
+    if cooldown_seconds <= 0:
+        return
+
+    _external_reranker_cooldown_until[provider] = time.time() + cooldown_seconds
+    logger.warning(
+        f"RERANKER_PROVIDER={provider} kena rate limit; skip provider ini selama {cooldown_seconds:.0f} detik dan fallback ke local."
+    )
+
+
+def preload_reranker() -> None:
+    provider = _get_reranker_provider()
+    if provider == "jina" and _get_jina_api_key():
+        logger.info(
+            f"RERANKER_PROVIDER=jina aktif; menggunakan Jina model={os.getenv('JINA_RERANKER_MODEL', JINA_RERANKER_MODEL)}. "
+            "Local CrossEncoder tidak dipreload."
+        )
+        return
+    if provider == "jina" and not _get_jina_api_key():
+        logger.warning("JINA_API_KEY belum diset; fallback ke local CrossEncoder.")
+    logger.info(f"RERANKER_PROVIDER={provider}; menggunakan local CrossEncoder model={LOCAL_RERANKER_MODEL_NAME}.")
+    get_cross_encoder()
 
 def _parse_hit(hit: dict, score: float) -> HaditsResult:
     """Konversi satu hit OpenSearch menjadi HaditsResult dan ekstrak Highlight."""
     src = hit.get("_source", {})
+    hadits_id = hit.get("_id") or src.get("id") or f"{src.get('nama_perawi', '')}-{src.get('nomor_hadits', 0)}"
     terjemahan_asli = src.get("terjemahan", "")
     
     # 1. Coba ambil highlight dari OpenSearch (Akan ada jika mode BM25 / Hybrid)
@@ -78,7 +163,7 @@ def _parse_hit(hit: dict, score: float) -> HaditsResult:
             preview += "..."
 
     return HaditsResult(
-        id=hit["_id"],
+        id=str(hadits_id),
         nama_perawi=src.get("nama_perawi", ""),
         nomor_hadits=src.get("nomor_hadits", 0),
         referensi_lengkap=src.get("referensi_lengkap", ""),
@@ -159,6 +244,207 @@ def _filter_low_confidence_reranked_results(
         if result.score >= LOW_CONFIDENCE_RERANKER_SCORE
         or _has_query_term_overlap(query, result)
     ]
+
+
+def _filter_irrelevant_feedback(
+    query: str,
+    results: list[HaditsResult],
+) -> tuple[list[HaditsResult], set[str]]:
+    irrelevant_ids = get_irrelevant_feedback_ids(query)
+    if not irrelevant_ids:
+        return results, set()
+
+    return [
+        result
+        for result in results
+        if result.id not in irrelevant_ids
+    ], irrelevant_ids
+
+
+def _apply_irrelevant_feedback(
+    query: str,
+    response: SearchResponse,
+) -> SearchResponse:
+    filtered_results, irrelevant_feedback_ids = _filter_irrelevant_feedback(
+        query,
+        response.results,
+    )
+    removed_count = len(response.results) - len(filtered_results)
+    if response.total <= len(response.results):
+        total = max(0, response.total - removed_count)
+    else:
+        total = max(0, response.total - len(irrelevant_feedback_ids))
+    return SearchResponse(
+        query=response.query,
+        total=total,
+        suggestion=response.suggestion,
+        results=filtered_results,
+    )
+
+
+def _get_reranker_fetch_size() -> int:
+    return max(1, min(RERANKER_CANDIDATE_SIZE, RERANKER_MAX_CANDIDATES))
+
+
+def _paginate_results(
+    results: list[HaditsResult],
+    page: int,
+    page_size: int,
+) -> list[HaditsResult]:
+    start = (page - 1) * page_size
+    end = start + page_size
+    return results[start:end]
+
+
+def _reranker_document_text(result: HaditsResult) -> str:
+    return f"{result.referensi_lengkap}\nTerjemahan: {result.terjemahan}"
+
+
+def _rerank_with_jina(
+    query: str,
+    results: list[HaditsResult],
+    context: str,
+) -> list[HaditsResult]:
+    api_key = _get_jina_api_key()
+    if not api_key:
+        raise RuntimeError("JINA_API_KEY belum diset")
+
+    model = os.getenv("JINA_RERANKER_MODEL", JINA_RERANKER_MODEL)
+    documents = [_reranker_document_text(result) for result in results]
+    payload = {
+        "model": model,
+        "query": query,
+        "documents": documents,
+        "top_n": len(documents),
+        "return_documents": False,
+    }
+    request = urllib.request.Request(
+        os.getenv("JINA_RERANKER_API_URL", JINA_RERANKER_API_URL),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": os.getenv("JINA_RERANKER_USER_AGENT", JINA_RERANKER_USER_AGENT),
+        },
+        method="POST",
+    )
+
+    logger.info(f"=== Top 10 BEFORE Jina Reranking ({context}: '{query}') ===")
+    for i, result in enumerate(results[:10]):
+        logger.info(
+            f"{i+1}. [Score: {result.score:.4f}] "
+            f"{result.nama_perawi} no. {result.nomor_hadits}"
+        )
+
+    try:
+        with urllib.request.urlopen(request, timeout=JINA_RERANKER_TIMEOUT_SECONDS) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        if e.code == 429:
+            _mark_external_reranker_rate_limited("jina")
+        raise RuntimeError(f"Jina reranker HTTP {e.code}: {error_body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Jina reranker request gagal: {e.reason}") from e
+
+    data = json.loads(response_body)
+    reranked: list[HaditsResult] = []
+    seen_indices: set[int] = set()
+    for item in data.get("results", []):
+        index = item.get("index")
+        if index is None:
+            continue
+        index = int(index)
+        if index < 0 or index >= len(results):
+            continue
+
+        relevance_score = item.get("relevance_score", item.get("score"))
+        if relevance_score is None:
+            continue
+
+        result = results[index]
+        result.score = float(relevance_score)
+        reranked.append(result)
+        seen_indices.add(index)
+
+    if not reranked:
+        raise RuntimeError("Respons Jina reranker tidak berisi hasil valid")
+
+    for index, result in enumerate(results):
+        if index not in seen_indices:
+            reranked.append(result)
+
+    logger.info(f"=== Top 10 AFTER Jina Reranking ({context}: '{query}') ===")
+    for i, result in enumerate(reranked[:10]):
+        logger.info(
+            f"{i+1}. [Score: {result.score:.4f}] "
+            f"{result.nama_perawi} no. {result.nomor_hadits}"
+        )
+
+    return reranked
+
+
+def _rerank_with_cross_encoder(
+    query: str,
+    results: list[HaditsResult],
+    context: str,
+) -> list[HaditsResult]:
+    logger.info(f"=== Top 10 BEFORE Reranking ({context}: '{query}') ===")
+    for i, result in enumerate(results[:10]):
+        logger.info(
+            f"{i+1}. [Score: {result.score:.4f}] "
+            f"{result.nama_perawi} no. {result.nomor_hadits}"
+        )
+
+    ce_model = get_cross_encoder()
+    pairs = [[query, result.terjemahan] for result in results]
+    ce_scores = ce_model.predict(pairs)
+
+    for result, score in zip(results, ce_scores):
+        result.score = float(score)
+
+    reranked = sorted(results, key=lambda x: x.score, reverse=True)
+
+    logger.info(f"=== Top 10 AFTER Reranking ({context}: '{query}') ===")
+    for i, result in enumerate(reranked[:10]):
+        logger.info(
+            f"{i+1}. [Score: {result.score:.4f}] "
+            f"{result.nama_perawi} no. {result.nomor_hadits}"
+        )
+
+    return reranked
+
+
+def _rerank_results(
+    query: str,
+    results: list[HaditsResult],
+    context: str,
+    reranker_provider: str | None = None,
+) -> list[HaditsResult]:
+    provider = _get_reranker_provider(reranker_provider)
+    logger.info(f"Reranker switch check: requested={reranker_provider or 'env'}, resolved={provider}, candidates={len(results)}")
+
+    if provider == "jina" and _get_jina_api_key():
+        cooldown_remaining = _external_reranker_cooldown_remaining("jina")
+        if cooldown_remaining > 0:
+            logger.warning(
+                f"RERANKER_PROVIDER=jina masih cooldown {cooldown_remaining:.0f} detik; fallback ke local CrossEncoder."
+            )
+        else:
+            try:
+                return _rerank_with_jina(query, results, context)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    _mark_external_reranker_rate_limited("jina")
+                logger.warning(f"Jina reranker gagal, fallback ke local CrossEncoder: {str(e)}")
+            except Exception as e:
+                logger.warning(f"Jina reranker gagal, fallback ke local CrossEncoder: {str(e)}")
+
+    if provider == "jina" and not _get_jina_api_key():
+        logger.warning("RERANKER_PROVIDER=jina dipilih tapi JINA_API_KEY kosong; fallback ke local CrossEncoder.")
+    logger.info(f"RERANKER_PROVIDER=local berjalan ({context}); model={LOCAL_RERANKER_MODEL_NAME}, candidates={len(results)}")
+    return _rerank_with_cross_encoder(query, results, context)
 
 
 def _is_procedural_query(query: str) -> bool:
@@ -272,36 +558,62 @@ def get_hadits_by_id(client: OpenSearch, hadits_id: str) -> HaditsResult:
     return _parse_hit(hit, 1.0)
 
 
-def get_related_hadits(client: OpenSearch, hadits_id: str) -> list[HaditsResult]:
-    """Ambil daftar hadits yang mirip dari Neon DB (precomputed)."""
+def _get_precomputed_related_hadits(
+    client: OpenSearch,
+    hadits_id: str,
+    limit: int,
+) -> list[HaditsResult]:
+    """Ambil related hadits dari tabel precomputed."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        logger.info("DATABASE_URL tidak ditemukan; Hadits Serupa kosong karena semantic fallback dinonaktifkan.")
+        return []
+
+    conn = None
     try:
-        db_url = os.getenv("DATABASE_URL")
-        if not db_url:
-            logger.error("DATABASE_URL tidak ditemukan")
-            return []
-            
         conn = psycopg2.connect(db_url)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT target_id, score FROM hadits_similarity WHERE source_id = %s ORDER BY score DESC LIMIT 10", 
-                (hadits_id,)
+                """
+                SELECT target_id, score
+                FROM hadits_similarity
+                WHERE source_id = %s
+                ORDER BY score DESC
+                LIMIT %s
+                """,
+                (hadits_id, limit),
             )
             rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"Gagal membaca tabel hadits_similarity: {str(e)}")
+        return []
+    finally:
+        if conn:
             conn.close()
-            
+
+    try:
         if not rows:
             return []
-        
-        # Batch fetch content dari OpenSearch
+
         target_ids = [r[0] for r in rows]
         scores = {r[0]: r[1] for r in rows}
-        
         res = client.mget(index=INDEX_NAME, body={"ids": target_ids})
-        
-        return [_parse_hit(hit, scores[hit["_id"]]) for hit in res["docs"] if hit.get("found")]
+
+        return [
+            _parse_hit(hit, scores[hit["_id"]])
+            for hit in res["docs"]
+            if hit.get("found")
+        ]
     except Exception as e:
-        logger.error(f"Gagal mengambil related hadits: {str(e)}")
+        logger.warning(f"Gagal mengambil konten related precomputed: {str(e)}")
         return []
+
+
+def get_related_hadits(client: OpenSearch, hadits_id: str) -> list[HaditsResult]:
+    """Ambil daftar hadits mirip dari tabel precomputed database."""
+    related = _get_precomputed_related_hadits(client, hadits_id, RELATED_HADITS_LIMIT)
+    filtered, _ = _filter_irrelevant_feedback(f"related:{hadits_id}", related)
+    return filtered
 
 
 
@@ -313,10 +625,59 @@ def search_hadits(
     mode: str = "knn",
     threshold: float | None = None,
     use_reranker: bool = True,
+    reranker_provider: str | None = None,
 ) -> SearchResponse:
-    # Selalu ambil sesuai page dan size untuk membatasi jumlah reranking ke 10 saja (atau sesuai page_size) agar efisien
-    fetch_page = page
-    fetch_size = page_size
+    resolved_reranker_provider = _get_reranker_provider(reranker_provider)
+    is_popular = record_search_query_and_get_popularity(query)
+    cache_key = build_search_cache_key(
+        query=query,
+        mode=mode,
+        page=page,
+        page_size=page_size,
+        nama_perawi=None,
+        threshold=threshold,
+        use_reranker=use_reranker,
+        reranker_id=_get_reranker_cache_id(resolved_reranker_provider) if use_reranker else None,
+        reranker_candidate_limit=_get_reranker_fetch_size() if use_reranker else None,
+    )
+    logger.info(
+        f"Search reranker setting: enabled={use_reranker}, requested={reranker_provider or 'env'}, "
+        f"resolved={resolved_reranker_provider}, cache_id={_get_reranker_cache_id(resolved_reranker_provider) if use_reranker else 'none'}"
+    )
+    cached_response = get_cached_search_response(cache_key)
+    if cached_response is not None:
+        if is_popular:
+            set_cached_search_response(cache_key, cached_response, is_popular=True)
+        return _apply_irrelevant_feedback(query, cached_response)
+
+    candidate_response = _search_hadits_candidates(
+        client=client,
+        query=query,
+        page=page,
+        page_size=page_size,
+        mode=mode,
+        threshold=threshold,
+        use_reranker=use_reranker,
+        reranker_provider=resolved_reranker_provider,
+    )
+    set_cached_search_response(cache_key, candidate_response, is_popular=is_popular)
+    return _apply_irrelevant_feedback(query, candidate_response)
+
+
+def _search_hadits_candidates(
+    client: OpenSearch,
+    query: str,
+    page: int = 1,
+    page_size: int = 10,
+    mode: str = "knn",
+    threshold: float | None = None,
+    use_reranker: bool = True,
+    reranker_provider: str | None = None,
+) -> SearchResponse:
+    # Saat reranker aktif, ambil top-N kandidat dari awal, rerank semuanya,
+    # baru pagination setelah skor reranker final.
+    fetch_page = 1 if use_reranker else page
+    fetch_size = _get_reranker_fetch_size() if use_reranker else page_size
     
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
@@ -356,36 +717,19 @@ def search_hadits(
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
     
-    # --- RERANKING DENGAN CROSS-ENCODER ---
+    # --- RERANKING ---
     if use_reranker and results:
-        logger.info(f"=== Top 10 BEFORE Reranking (search: '{query}') ===")
-        for i, r in enumerate(results[:10]):
-            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
-
-        ce_model = get_cross_encoder()
-        pairs = [[query, res.terjemahan] for res in results]
-        
-        # Hitung skor menggunakan cross-encoder
-        ce_scores = ce_model.predict(pairs)
-        for res, score in zip(results, ce_scores):
-            res.score = float(score)
-            
-        # Urutkan berdasarkan skor Cross-Encoder yang baru
-        results = sorted(results, key=lambda x: x.score, reverse=True)
-
-        logger.info(f"=== Top 10 AFTER Reranking (search: '{query}') ===")
-        for i, r in enumerate(results[:10]):
-            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
-
+        results = _rerank_results(query, results, "search", reranker_provider)
         results = _filter_low_confidence_reranked_results(query, results)
-        if page == 1 and not results:
-            total = 0
 
     results = _rerank_for_procedural_query(query, results)
-    
-    # Karena kita sudah mengambil data sesuai pagination OpenSearch, tidak perlu lagi manual pagination
-    paginated_results = results
 
+    if use_reranker:
+        total = len(results)
+        paginated_results = _paginate_results(results, page, page_size)
+    else:
+        paginated_results = results
+    
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
 def advanced_search_hadits(
@@ -397,9 +741,59 @@ def advanced_search_hadits(
     mode: str = "knn",
     threshold: float | None = None,
     use_reranker: bool = True,
+    reranker_provider: str | None = None,
 ) -> SearchResponse:
-    fetch_page = page
-    fetch_size = page_size
+    resolved_reranker_provider = _get_reranker_provider(reranker_provider)
+    is_popular = record_search_query_and_get_popularity(query)
+    cache_key = build_search_cache_key(
+        query=query,
+        mode=mode,
+        page=page,
+        page_size=page_size,
+        nama_perawi=nama_perawi,
+        threshold=threshold,
+        use_reranker=use_reranker,
+        reranker_id=_get_reranker_cache_id(resolved_reranker_provider) if use_reranker else None,
+        reranker_candidate_limit=_get_reranker_fetch_size() if use_reranker else None,
+    )
+    logger.info(
+        f"Advanced search reranker setting: enabled={use_reranker}, requested={reranker_provider or 'env'}, "
+        f"resolved={resolved_reranker_provider}, cache_id={_get_reranker_cache_id(resolved_reranker_provider) if use_reranker else 'none'}"
+    )
+    cached_response = get_cached_search_response(cache_key)
+    if cached_response is not None:
+        if is_popular:
+            set_cached_search_response(cache_key, cached_response, is_popular=True)
+        return _apply_irrelevant_feedback(query, cached_response)
+
+    candidate_response = _advanced_search_hadits_candidates(
+        client=client,
+        query=query,
+        page=page,
+        page_size=page_size,
+        nama_perawi=nama_perawi,
+        mode=mode,
+        threshold=threshold,
+        use_reranker=use_reranker,
+        reranker_provider=resolved_reranker_provider,
+    )
+    set_cached_search_response(cache_key, candidate_response, is_popular=is_popular)
+    return _apply_irrelevant_feedback(query, candidate_response)
+
+
+def _advanced_search_hadits_candidates(
+    client: OpenSearch,
+    query: str,
+    page: int = 1,
+    page_size: int = 10,
+    nama_perawi: str | None = None,
+    mode: str = "knn",
+    threshold: float | None = None,
+    use_reranker: bool = True,
+    reranker_provider: str | None = None,
+) -> SearchResponse:
+    fetch_page = 1 if use_reranker else page
+    fetch_size = _get_reranker_fetch_size() if use_reranker else page_size
     
     embedding = get_model().encode(query).tolist()
     strategy = get_strategy(mode)
@@ -447,32 +841,18 @@ def advanced_search_hadits(
 
     results = [_parse_hit(h, h["_score"]) for h in hits]
     
-    # --- RERANKING DENGAN CROSS-ENCODER ---
+    # --- RERANKING ---
     if use_reranker and results:
-        logger.info(f"=== Top 10 BEFORE Reranking (advanced search: '{query}') ===")
-        for i, r in enumerate(results[:10]):
-            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
-
-        ce_model = get_cross_encoder()
-        pairs = [[query, res.terjemahan] for res in results]
-        
-        ce_scores = ce_model.predict(pairs)
-        for res, score in zip(results, ce_scores):
-            res.score = float(score)
-            
-        results = sorted(results, key=lambda x: x.score, reverse=True)
-
-        logger.info(f"=== Top 10 AFTER Reranking (advanced search: '{query}') ===")
-        for i, r in enumerate(results[:10]):
-            logger.info(f"{i+1}. [Score: {r.score:.4f}] {r.nama_perawi} no. {r.nomor_hadits}")
-
+        results = _rerank_results(query, results, "advanced search", reranker_provider)
         results = _filter_low_confidence_reranked_results(query, results)
-        if page == 1 and not results:
-            total = 0
         
     results = _rerank_for_procedural_query(query, results)
-    
-    paginated_results = results
+
+    if use_reranker:
+        total = len(results)
+        paginated_results = _paginate_results(results, page, page_size)
+    else:
+        paginated_results = results
 
     return SearchResponse(query=query, total=total, suggestion=suggestion, results=paginated_results)
 
