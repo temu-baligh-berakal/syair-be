@@ -39,7 +39,12 @@ class SearchQuery(BaseModel):
     )
     use_reranker: bool = Field(
         default=True,
-        description="Apakah menggunakan model Cross-Encoder untuk mererank hasil pencarian. Default True.",
+        description="Apakah menggunakan reranker untuk mererank hasil pencarian. Default True.",
+    )
+    reranker_provider: Optional[str] = Field(
+        default=None,
+        pattern="^(local|jina)$",
+        description="Provider reranker: local atau jina. Jika None, backend memakai RERANKER_PROVIDER.",
     )
 
     @field_validator("mode")
@@ -108,3 +113,19 @@ class LLMSummarizerRequest(BaseModel):
 class SuggestionResponse(BaseModel):
     query: str = Field(description="Query parsial yang dikirim user")
     suggestions: List[str] = Field(description="Daftar saran pelengkapan kata")
+
+
+class SearchFeedbackRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    hadits_id: str = Field(..., min_length=1, max_length=200)
+    action: str = Field(
+        ...,
+        pattern="^(irrelevant|clear)$",
+        description="Gunakan 'irrelevant' untuk menandai dan 'clear' untuk membatalkan.",
+    )
+    client_id: str = Field(..., min_length=1, max_length=120)
+    source: Optional[str] = Field(default=None, max_length=50)
+
+
+class SearchFeedbackResponse(BaseModel):
+    ok: bool = True
