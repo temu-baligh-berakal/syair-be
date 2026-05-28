@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
@@ -5,7 +6,16 @@ from fastapi.testclient import TestClient
 
 from app.main import app as fastapi_app
 from app.routers.hadits_router import get_client
-from app.services.hadits_service import _parse_hit, search_hadits, advanced_search_hadits, get_suggestions
+from app.schemas.hadits_schema import HaditsResult, SearchResponse
+from app.services.hadits_service import (
+    get_related_hadits,
+    _get_reranker_provider,
+    _parse_hit,
+    _rerank_with_jina,
+    search_hadits,
+    advanced_search_hadits,
+    get_suggestions,
+)
 from app.services.strategies import get_strategy, get_available_modes
 
 
@@ -13,6 +23,7 @@ from app.services.strategies import get_strategy, get_available_modes
 FAKE_EMBEDDING = np.zeros(384)
 
 FAKE_HIT = {
+    "_id": "bukhari-1",
     "_score": 0.92,
     "_source": {
         "nama_perawi": "Bukhari",
@@ -24,7 +35,38 @@ FAKE_HIT = {
 }
 
 def make_opensearch_response(hits: list[dict]) -> dict:
-    return {"hits": {"total": {"value": len(hits)}, "hits": hits}}
+    hits_with_ids = [
+        {"_id": f"test-{index}", **hit}
+        for index, hit in enumerate(hits, start=1)
+    ]
+    return {"hits": {"total": {"value": len(hits_with_ids)}, "hits": hits_with_ids}}
+
+
+def make_hadits_result(hadits_id: str) -> HaditsResult:
+    return HaditsResult(
+        id=hadits_id,
+        nama_perawi="Bukhari",
+        nomor_hadits=1,
+        referensi_lengkap="Hadits Bukhari Nomor 1",
+        arab="...",
+        terjemahan="Sesungguhnya setiap amalan tergantung pada niatnya.",
+        preview="Sesungguhnya setiap amalan tergantung pada niatnya.",
+        score=1.0,
+    )
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 @pytest.fixture
@@ -98,7 +140,7 @@ class TestParseHit:
         assert result.score == 0.92
 
     def test_parse_hit_field_kosong(self):
-        hit = {"_score": 0.5, "_source": {}}
+        hit = {"_id": "empty", "_score": 0.5, "_source": {}}
         result = _parse_hit(hit, score=0.5)
         assert result.nama_perawi == ""
         assert result.nomor_hadits == 0
@@ -140,6 +182,151 @@ class TestParseSuggestion:
 
 class TestSearchHaditsService:
 
+    def test_legacy_voyage_provider_diarahkan_ke_jina(self):
+        assert _get_reranker_provider("voyage") == "jina"
+
+    def test_cache_miss_menjalankan_flow_mahal_dan_menyimpan_cache(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        with patch(
+            "app.services.hadits_service.record_search_query_and_get_popularity",
+            return_value=False,
+        ), patch(
+            "app.services.hadits_service.get_cached_search_response",
+            return_value=None,
+        ), patch(
+            "app.services.hadits_service.set_cached_search_response",
+        ) as set_cache:
+            search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        mock_model.encode.assert_called_once_with("niat ibadah")
+        mock_client.search.assert_called_once()
+        mock_cross_encoder.predict.assert_called_once()
+        set_cache.assert_called_once()
+        assert set_cache.call_args.kwargs["is_popular"] is False
+
+    def test_cache_hit_tidak_memanggil_model_opensearch_reranker(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        cached = SearchResponse(
+            query="niat ibadah",
+            total=1,
+            results=[make_hadits_result("cached-1")],
+        )
+
+        with patch(
+            "app.services.hadits_service.record_search_query_and_get_popularity",
+            return_value=False,
+        ), patch(
+            "app.services.hadits_service.get_cached_search_response",
+            return_value=cached,
+        ), patch(
+            "app.services.hadits_service.set_cached_search_response",
+        ) as set_cache:
+            resp = search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        assert resp == cached
+        mock_model.encode.assert_not_called()
+        mock_client.search.assert_not_called()
+        mock_cross_encoder.predict.assert_not_called()
+        set_cache.assert_not_called()
+
+    def test_cache_miss_query_popular_menyimpan_dengan_ttl_popular(
+        self,
+        mock_model,
+        mock_client,
+    ):
+        with patch(
+            "app.services.hadits_service.record_search_query_and_get_popularity",
+            return_value=True,
+        ), patch(
+            "app.services.hadits_service.get_cached_search_response",
+            return_value=None,
+        ), patch(
+            "app.services.hadits_service.set_cached_search_response",
+        ) as set_cache:
+            search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        assert set_cache.call_args.kwargs["is_popular"] is True
+
+    def test_feedback_tidak_relevan_tetap_difilter_setelah_cache_hit(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        cached = SearchResponse(
+            query="niat ibadah",
+            total=2,
+            results=[
+                make_hadits_result("keep"),
+                make_hadits_result("drop"),
+            ],
+        )
+
+        with patch(
+            "app.services.hadits_service.record_search_query_and_get_popularity",
+            return_value=False,
+        ), patch(
+            "app.services.hadits_service.get_cached_search_response",
+            return_value=cached,
+        ), patch(
+            "app.services.hadits_service.get_irrelevant_feedback_ids",
+            return_value={"drop"},
+        ):
+            resp = search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        assert resp.total == 1
+        assert [result.id for result in resp.results] == ["keep"]
+        mock_model.encode.assert_not_called()
+        mock_client.search.assert_not_called()
+        mock_cross_encoder.predict.assert_not_called()
+
+    def test_jina_reranker_dipakai_jika_api_key_ada(
+        self,
+        monkeypatch,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        monkeypatch.setenv("RERANKER_PROVIDER", "jina")
+        monkeypatch.setenv("JINA_API_KEY", "test-key")
+
+        with patch(
+            "app.services.hadits_service._rerank_with_jina",
+            side_effect=lambda query, results, context: results,
+        ) as jina_rerank:
+            search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        jina_rerank.assert_called_once()
+        mock_cross_encoder.predict.assert_not_called()
+
+    def test_jina_reranker_cooldown_langsung_fallback_local(
+        self,
+        monkeypatch,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        monkeypatch.setenv("RERANKER_PROVIDER", "jina")
+        monkeypatch.setenv("JINA_API_KEY", "test-key")
+        monkeypatch.setattr(
+            "app.services.hadits_service._external_reranker_cooldown_remaining",
+            lambda provider: 30.0 if provider == "jina" else 0.0,
+        )
+
+        with patch("app.services.hadits_service._rerank_with_jina") as jina_rerank:
+            search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
+
+        jina_rerank.assert_not_called()
+        mock_cross_encoder.predict.assert_called_once()
+
     def test_memanggil_model_encode(self, mock_model, mock_cross_encoder, mock_client):
         search_hadits(client=mock_client, query="niat ibadah", page=1, page_size=5)
         mock_model.encode.assert_called_once_with("niat ibadah")
@@ -157,6 +344,47 @@ class TestSearchHaditsService:
 
         if "knn" in body["query"]:
             assert body["query"]["knn"]["embedding"]["k"] == 30
+
+    def test_reranker_mengambil_top_100_lalu_memotong_page(
+        self,
+        mock_model,
+        mock_cross_encoder,
+        mock_client,
+    ):
+        hits = [
+            {
+                "_id": f"hadits-{number}",
+                "_score": 0.9,
+                "_source": {
+                    "nama_perawi": "Bukhari",
+                    "nomor_hadits": number,
+                    "referensi_lengkap": f"Hadits Bukhari Nomor {number}",
+                    "arab": "...",
+                    "terjemahan": f"Hadits tentang niat nomor {number}.",
+                },
+            }
+            for number in range(1, 13)
+        ]
+        mock_client.search.return_value = make_opensearch_response(hits)
+        mock_cross_encoder.predict.side_effect = None
+        mock_cross_encoder.predict.return_value = list(range(12))
+
+        resp = search_hadits(client=mock_client, query="niat ibadah", page=2, page_size=5)
+        body = mock_client.search.call_args.kwargs["body"]
+
+        assert body["from"] == 0
+        assert body["size"] == 100
+        if "knn" in body["query"]:
+            assert body["query"]["knn"]["embedding"]["k"] == 100
+        assert len(mock_cross_encoder.predict.call_args.args[0]) == 12
+        assert resp.total == 12
+        assert [result.id for result in resp.results] == [
+            "hadits-7",
+            "hadits-6",
+            "hadits-5",
+            "hadits-4",
+            "hadits-3",
+        ]
 
     def test_threshold_min_score_applied(self, mock_model, mock_client):
         search_hadits(client=mock_client, query="niat", threshold=0.75)
@@ -262,10 +490,11 @@ class TestSearchHaditsService:
     def test_mode_bm25(self, mock_model, mock_client):
         search_hadits(client=mock_client, query="niat", page_size=5, mode="bm25")
         body = mock_client.search.call_args.kwargs["body"]
-        assert "multi_match" in body["query"]
+        assert "query_string" in body["query"]
 
     def test_query_prosedural_mererank_hasil_bertata_cara(self, mock_model, mock_client):
         procedural_hit = {
+            "_id": "muslim-248",
             "_score": 1.2,
             "_source": {
                 "nama_perawi": "Muslim",
@@ -276,6 +505,7 @@ class TestSearchHaditsService:
             },
         }
         non_procedural_hit = {
+            "_id": "bukhari-127",
             "_score": 4.8,
             "_source": {
                 "nama_perawi": "Bukhari",
@@ -293,6 +523,57 @@ class TestSearchHaditsService:
 
         assert resp.results[0].nama_perawi == "Muslim"
         assert "berwudhu" in resp.results[0].terjemahan.lower()
+
+
+class TestJinaReranker:
+
+    def test_jina_response_mengurutkan_dan_mengganti_score(self, monkeypatch):
+        monkeypatch.setenv("JINA_API_KEY", "test-key")
+        first = make_hadits_result("first")
+        second = make_hadits_result("second")
+
+        def fake_urlopen(request, timeout):
+            payload = json.loads(request.data.decode("utf-8"))
+            assert payload["model"] == "jina-reranker-v3"
+            assert payload["query"] == "niat ibadah"
+            assert payload["top_n"] == 2
+            assert payload["return_documents"] is False
+            assert request.headers["Authorization"] == "Bearer test-key"
+            assert request.headers["Accept"] == "application/json"
+            assert request.headers["User-agent"] == "SyairBackend/0.1"
+            return FakeHTTPResponse(
+                {
+                    "results": [
+                        {"index": 1, "relevance_score": 0.91},
+                        {"index": 0, "relevance_score": 0.12},
+                    ]
+                }
+            )
+
+        monkeypatch.setattr("app.services.hadits_service.urllib.request.urlopen", fake_urlopen)
+
+        reranked = _rerank_with_jina("niat ibadah", [first, second], "test")
+
+        assert [result.id for result in reranked] == ["second", "first"]
+        assert [result.score for result in reranked] == [0.91, 0.12]
+
+
+class TestRelatedHadits:
+
+    def test_related_hadits_kosong_tidak_fallback_semantic(self, monkeypatch, mock_client):
+        monkeypatch.setenv("DATABASE_URL", "postgres://test")
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        conn.cursor.return_value.__enter__.return_value = cursor
+
+        with patch("app.services.hadits_service.psycopg2.connect", return_value=conn):
+            related = get_related_hadits(mock_client, "bukhari-1")
+
+        assert related == []
+        mock_client.get.assert_not_called()
+        mock_client.search.assert_not_called()
+        mock_client.mget.assert_not_called()
 
 
 class TestAutocompleteSuggestion:
@@ -429,6 +710,7 @@ class TestSearchRouter:
             mock_svc.return_value = SearchResponse(
                 query="niat", total=1,
                 results=[HaditsResult(
+                    id="bukhari-1",
                     nama_perawi="Bukhari", nomor_hadits=1,
                     referensi_lengkap="Hadits Bukhari Nomor 1",
                     arab="...", terjemahan="...", 
