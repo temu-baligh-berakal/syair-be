@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 from groq import Groq
 import threading
@@ -11,6 +12,7 @@ from app.schemas.hadits_schema import (
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
 class SummarizerError(Exception):
     """Kesalahan terkontrol untuk service rangkuman."""
@@ -40,15 +42,17 @@ def get_next_api_key() -> str:
 
     with _api_key_lock:
         key = _api_keys[_api_key_index]
+        current_index = _api_key_index
         _api_key_index = (_api_key_index + 1) % len(_api_keys)
+        
+        # Log rotasi kunci (hanya tampilkan 4 karakter awal agar aman)
+        logger.info(f"LLM Key Rotation: Menggunakan API Key index {current_index} (Prefix: {key[:8]}...)")
+        
         return key
 
 
 def summarize_hadits(request: LLMSummarizerRequest) -> str:
     top_10_hadits = request.hadits_results[:10]
-
-    api_key = get_next_api_key()
-    client = Groq(api_key=api_key)
 
     # Format konteks hadits
     hadits_text = "\n\n".join(
@@ -107,37 +111,45 @@ Hadits-hadits yang ditemukan:
 Buatlah ringkasan sesuai aturan di atas. Ingat: jangan sebut "Dokumen N" — gunakan nama perawi dan nomor hadits jika perlu menyebut sumber.
 """
 
-    try:
-        response = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt,
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.2,
-            max_tokens=1024,
-        )
+    max_retries = len(_api_keys)
+    last_exception = None
 
-    except Exception as exc:
-        raise SummarizerError(
-            f"Gagal menghubungi layanan LLM: {str(exc)}"
-        ) from exc
+    for attempt in range(max_retries):
+        api_key = get_next_api_key()
+        client = Groq(api_key=api_key)
+        current_key_index = (_api_key_index - 1) % max_retries
 
-    content = (
-        response.choices[0].message.content
-        if response.choices
-        else None
-    )
+        try:
+            logger.info(f"Attempt {attempt + 1}/{max_retries}: Memulai peringkasan (Key Index: {current_key_index})")
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            
+            content = response.choices[0].message.content if response.choices else None
+            if not content or not content.strip():
+                raise SummarizerError("Layanan LLM mengembalikan ringkasan kosong.")
 
-    if not content or not content.strip():
-        raise SummarizerError(
-            "Layanan LLM mengembalikan ringkasan kosong."
-        )
+            logger.info(f"Peringkasan berhasil pada attempt {attempt + 1}.")
+            return content
 
-    return content
+        except Exception as exc:
+            last_exception = exc
+            error_msg = str(exc)
+            
+            if "rate_limit" in error_msg.lower() or "429" in error_msg:
+                logger.warning(f"RATE LIMIT on Key Index {current_key_index}. Retrying ({attempt + 1}/{max_retries})...")
+                continue
+            
+            logger.error(f"Error pada attempt {attempt + 1}: {error_msg}")
+            # Jika bukan rate limit, tetap coba kunci berikutnya sampai max_retries
+            if attempt < max_retries - 1:
+                continue
+            break
+
+    raise SummarizerError(f"Gagal setelah {max_retries} percobaan. Error terakhir: {str(last_exception)}")
