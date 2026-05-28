@@ -2,9 +2,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from opensearchpy import OpenSearch
 
-from app.schemas.hadits_schema import SearchQuery, SearchResponse, SuggestionResponse, HaditsDetailResponse
+from app.schemas.hadits_schema import SearchFeedbackRequest, SearchFeedbackResponse, SearchQuery, SearchResponse, SuggestionResponse, HaditsDetailResponse
 from app.services.opensearch_client import get_opensearch_client
 from app.services.hadits_service import search_hadits, advanced_search_hadits, get_suggestions, get_hadits_by_id, get_related_hadits
+from app.services.feedback_service import record_search_feedback
 router = APIRouter(prefix="/hadits", tags=["Hadits"])
 
 
@@ -30,7 +31,8 @@ def search(query: SearchQuery, client: OpenSearch = Depends(get_client)):
             page_size=query.page_size,
             mode=query.mode,
             threshold=query.threshold,
-            use_reranker=query.use_reranker
+            use_reranker=query.use_reranker,
+            reranker_provider=query.reranker_provider,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
@@ -48,10 +50,26 @@ def advanced_search(query: SearchQuery, client: OpenSearch = Depends(get_client)
             nama_perawi=query.nama_perawi,
             mode=query.mode,
             threshold=query.threshold,
-            use_reranker=query.use_reranker
+            use_reranker=query.use_reranker,
+            reranker_provider=query.reranker_provider,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menghubungi OpenSearch: {str(e)}")
+
+
+@router.post("/feedback", response_model=SearchFeedbackResponse, summary="Feedback Relevansi Hasil")
+def submit_feedback(feedback: SearchFeedbackRequest):
+    try:
+        record_search_feedback(
+            query=feedback.query,
+            hadits_id=feedback.hadits_id,
+            action=feedback.action,
+            client_id=feedback.client_id,
+            source=feedback.source,
+        )
+        return SearchFeedbackResponse(ok=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menyimpan feedback: {str(e)}")
 
 
 @router.get("/{hadits_id}", response_model=HaditsDetailResponse, summary="Detil Hadits dan Rekomendasi")
