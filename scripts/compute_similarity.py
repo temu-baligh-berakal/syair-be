@@ -1,5 +1,6 @@
 import os
 import psycopg2
+from psycopg2.extras import execute_values
 from opensearchpy import OpenSearch, helpers
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -23,14 +24,19 @@ def init_db_structure():
         
     conn = psycopg2.connect(database_url)
     cur = conn.cursor()
+    
+    # Reset data: Hapus tabel lama jika ada
+    print("Resetting database: Dropping table hadits_similarity...")
+    cur.execute("DROP TABLE IF EXISTS hadits_similarity;")
+    
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS hadits_similarity (
+        CREATE TABLE hadits_similarity (
             source_id TEXT,
             target_id TEXT,
             score FLOAT,
             PRIMARY KEY (source_id, target_id)
         );
-        CREATE INDEX IF NOT EXISTS idx_source_id ON hadits_similarity(source_id);
+        CREATE INDEX idx_source_id ON hadits_similarity(source_id);
     """)
     conn.commit()
     conn.close()
@@ -45,6 +51,8 @@ def worker_process(docs_batch):
     database_url = os.getenv("DATABASE_URL")
     conn = psycopg2.connect(database_url)
     cur = conn.cursor()
+    
+    data_to_insert = []
     
     try:
         for doc in docs_batch:
@@ -70,16 +78,29 @@ def worker_process(docs_batch):
                     target_id = hit['_id']
                     if source_id == target_id: continue
                     
-                    cur.execute(
-                        "INSERT INTO hadits_similarity (source_id, target_id, score) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                        (source_id, target_id, hit['_score'])
+                    data_to_insert.append((source_id, target_id, hit['_score']))
+                
+                # Batch insert setiap 500 records untuk efisiensi
+                if len(data_to_insert) >= 500:
+                    execute_values(
+                        cur, 
+                        "INSERT INTO hadits_similarity (source_id, target_id, score) VALUES %s ON CONFLICT DO NOTHING", 
+                        data_to_insert
                     )
+                    data_to_insert = []
+                    conn.commit()
                 
             except Exception as e:
-                # Log error ke terminal tanpa menghentikan worker lain
                 print(f"\nError processing {source_id}: {e}")
                 
-        conn.commit()
+        # Insert sisa data
+        if data_to_insert:
+            execute_values(
+                cur, 
+                "INSERT INTO hadits_similarity (source_id, target_id, score) VALUES %s ON CONFLICT DO NOTHING", 
+                data_to_insert
+            )
+            conn.commit()
     finally:
         cur.close()
         conn.close()
