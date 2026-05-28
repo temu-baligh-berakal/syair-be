@@ -2,14 +2,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.routers.hadits_router import router as hadits_router
 from app.routers.llm_summarizer_router import router as llm_summarizer_router
-from app.services.hadits_service import get_model, get_cross_encoder
+from app.services.hadits_service import get_model, preload_reranker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Preload model ML ke RAM saat server baru menyala
     print("Memuat model ML ke memori...")
     get_model()
-    get_cross_encoder()
+    preload_reranker()
     print("Model ML berhasil dimuat!")
     yield
     # Proses pembersihan jika ada (shutdown)
