@@ -101,6 +101,7 @@ class TestSearchQuery:
 
 
 HADITS_VALID = {
+    "id": "bukhari-1",
     "nama_perawi": "Bukhari",
     "nomor_hadits": 1,
     "referensi_lengkap": "Hadits Bukhari Nomor 1",
@@ -150,7 +151,7 @@ class TestSearchResponse:
         assert resp.results == []
 
     def test_response_banyak_hasil(self):
-        results = [HaditsResult(**{**HADITS_VALID, "nomor_hadits": i, "score": 0.9 - i * 0.01})
+        results = [HaditsResult(**{**HADITS_VALID, "id": f"bukhari-{i}", "nomor_hadits": i, "score": 0.9 - i * 0.01})
                    for i in range(1, 6)]
         resp = SearchResponse(query="shalat", total=5, results=results)
         assert resp.total == 5
