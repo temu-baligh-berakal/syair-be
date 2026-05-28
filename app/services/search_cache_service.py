@@ -33,6 +33,7 @@ def _get_redis_client():
     _redis_checked = True
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
+        logger.warning("Redis search cache disabled: REDIS_URL belum diset.")
         return None
 
     try:
@@ -40,6 +41,7 @@ def _get_redis_client():
 
         _redis_client = Redis.from_url(redis_url, decode_responses=True)
         _redis_client.ping()
+        logger.info("Redis search cache connected.")
     except Exception as e:
         logger.warning(f"Redis search cache tidak tersedia: {str(e)}")
         _redis_client = None
@@ -95,7 +97,11 @@ def record_search_query_and_get_popularity(query: str) -> bool:
         count = client.incr(key)
         if count == 1:
             client.expire(key, POPULAR_SEARCH_WINDOW_SECONDS)
-        return int(count) >= POPULAR_SEARCH_THRESHOLD
+        is_popular = int(count) >= POPULAR_SEARCH_THRESHOLD
+        logger.info(
+            f"Redis popular query count={count}, threshold={POPULAR_SEARCH_THRESHOLD}, popular={is_popular}"
+        )
+        return is_popular
     except Exception as e:
         logger.warning(f"Gagal menghitung popular query Redis: {str(e)}")
         return False
@@ -109,7 +115,9 @@ def get_cached_search_response(cache_key: str) -> SearchResponse | None:
     try:
         cached = client.get(cache_key)
         if not cached:
+            logger.info(f"Redis search cache MISS key={cache_key}")
             return None
+        logger.info(f"Redis search cache HIT key={cache_key}")
         return SearchResponse.model_validate_json(cached)
     except Exception as e:
         logger.warning(f"Gagal membaca cache search Redis: {str(e)}")
@@ -129,5 +137,6 @@ def set_cached_search_response(
     ttl = POPULAR_SEARCH_CACHE_TTL_SECONDS if is_popular else SEARCH_CACHE_TTL_SECONDS
     try:
         client.setex(cache_key, ttl, response.model_dump_json())
+        logger.info(f"Redis search cache SET key={cache_key}, ttl={ttl}, popular={is_popular}")
     except Exception as e:
         logger.warning(f"Gagal menyimpan cache search Redis: {str(e)}")
