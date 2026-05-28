@@ -1,8 +1,6 @@
-# Temu-Balik Informasi Project: Syair Hadits Search Engine
+# Syair Hadits Search Engine
 
 Sistem temu-balik informasi (information retrieval) yang dikhususkan untuk pencarian hadits berbahasa Indonesia, dibangun dengan FastAPI, OpenSearch, dan Next.js.
-
-**Tim: Syair**
 
 **Anggota:**
 - Muhammad Raihan Maulana (2306216636)
